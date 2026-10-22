@@ -1,0 +1,13 @@
+[Unit]
+Description=KwVPS Nginx limit to Cloudflare IP Access bridge
+After=network-online.target nginx.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/kwvps/scripts/cf_limit_ban.py
+User=root
+Group=root
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/etc/kwvps/cloudflare /run/lock

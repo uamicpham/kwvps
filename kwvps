@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# KwVPS entry point. Run with Bash 5+; no installation required for development.
+set -Eeuo pipefail
+if ((BASH_VERSINFO[0] < 5)); then
+  printf 'KwVPS yêu cầu Bash 5 trở lên.\n' >&2
+  exit 2
+fi
+KW_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+readonly KW_ROOT
+# shellcheck source=src/core.sh
+source "$KW_ROOT/src/core.sh"
+# shellcheck source=src/system.sh
+source "$KW_ROOT/src/system.sh"
+# shellcheck source=src/updates.sh
+source "$KW_ROOT/src/updates.sh"
+# shellcheck source=src/sites.sh
+source "$KW_ROOT/src/sites.sh"
+# shellcheck source=src/php.sh
+source "$KW_ROOT/src/php.sh"
+# shellcheck source=src/backups.sh
+source "$KW_ROOT/src/backups.sh"
+# shellcheck source=src/config_backups.sh
+source "$KW_ROOT/src/config_backups.sh"
+# shellcheck source=src/db.sh
+source "$KW_ROOT/src/db.sh"
+# shellcheck source=src/db_manage.sh
+source "$KW_ROOT/src/db_manage.sh"
+# shellcheck source=src/rename.sh
+source "$KW_ROOT/src/rename.sh"
+# shellcheck source=src/fail2ban.sh
+source "$KW_ROOT/src/fail2ban.sh"
+# shellcheck source=src/firewall.sh
+source "$KW_ROOT/src/firewall.sh"
+# shellcheck source=src/swap.sh
+source "$KW_ROOT/src/swap.sh"
+# shellcheck source=src/nginx.sh
+source "$KW_ROOT/src/nginx.sh"
+# shellcheck source=src/acme.sh
+source "$KW_ROOT/src/acme.sh"
+# shellcheck source=src/ssl.sh
+source "$KW_ROOT/src/ssl.sh"
+# shellcheck source=src/cloudflare.sh
+source "$KW_ROOT/src/cloudflare.sh"
+# shellcheck source=src/tunnel.sh
+source "$KW_ROOT/src/tunnel.sh"
+# shellcheck source=src/ssh.sh
+source "$KW_ROOT/src/ssh.sh"
+# shellcheck source=src/cache.sh
+source "$KW_ROOT/src/cache.sh"
+# shellcheck source=src/utilities.sh
+source "$KW_ROOT/src/utilities.sh"
+# shellcheck source=src/cron.sh
+source "$KW_ROOT/src/cron.sh"
+# shellcheck source=src/menu.sh
+source "$KW_ROOT/src/menu.sh"
+trap 'printf "\nĐã hủy và thoát KwVPS.\n" >&2; exit 130' INT
+trap 'exit 143' TERM
+# Never print BASH_COMMAND: future command arguments may contain credentials.
+trap 'kw_log ERROR "Thao tác thất bại tại dòng $LINENO (mã $?)."' ERR
+kw_main "$@"

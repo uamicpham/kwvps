@@ -1,0 +1,17 @@
+name: Bash checks
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install test tools
+        run: sudo apt-get update && sudo apt-get install -y shellcheck bats
+      - name: Syntax and smoke tests
+        run: bash tests/smoke.sh && bash tests/system-smoke.sh
+      - name: ShellCheck
+        run: shellcheck -x kwvps install.sh upgrade.sh scripts/kwvps-launcher scripts/bootstrap-release.sh scripts/package-release.sh src/*.sh tests/*.sh
+      - name: Bats
+        run: bats tests/*.bats

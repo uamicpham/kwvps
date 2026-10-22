@@ -1,0 +1,10 @@
+[Unit]
+Description=Run KwVPS Cloudflare limit bridge every minute
+
+[Timer]
+OnCalendar=*-*-* *:*:00
+Persistent=false
+Unit=kwvps-cf-limit-ban.service
+
+[Install]
+WantedBy=timers.target
