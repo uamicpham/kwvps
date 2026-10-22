@@ -6,7 +6,7 @@ Sau khi cài, lệnh mở menu là `kwvps`.
 
 ## Trạng thái
 
-KwVPS 0.50.3 cho phép cài và dùng PHP 7.4 EOL cho site sau xác nhận cảnh báo riêng; PHP 8.3/8.4/8.5 vẫn phải đạt kiểm tra bản vá. Xem [ghi chú phát hành](docs/RELEASE-NOTES-0.50.3.md), [bảng trạng thái](docs/TRANG-THAI-CHUC-NANG.md) và [lịch sử release](https://github.com/uamicpham/kwvps/releases).
+KwVPS 0.50.4 cho phép cài và dùng PHP 7.4 EOL cho site sau xác nhận cảnh báo riêng, đồng thời xử lý xung đột `php-common` khi cài từ PPA Ondřej; PHP 8.3/8.4/8.5 vẫn phải đạt kiểm tra bản vá. Xem [ghi chú phát hành](docs/RELEASE-NOTES-0.50.4.md), [bảng trạng thái](docs/TRANG-THAI-CHUC-NANG.md) và [lịch sử release](https://github.com/uamicpham/kwvps/releases).
 
 Quản lý Sites có tạo, đổi tên miền HTTP nguyên bản, clone source/code, xóa với hai lựa chọn giữ vùng phục hồi/xóa sạch và phân lại quyền. Menu Backup có phục hồi hoặc xóa sạch gói site đã giữ. Tunnel/route thật đã được thử trên VPS lab; đổi tên site không tự cập nhật DNS/route Cloudflare hoặc URL ứng dụng. Các thao tác không xóa dùng xác nhận `y/N`; xóa yêu cầu gõ lại đối tượng. **Không cài đè lên VPS LarVPS, web stack có sẵn hoặc máy chứa website/dữ liệu.**
 

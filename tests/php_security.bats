@@ -172,6 +172,35 @@ setup() {
   ! kw_php_simulate_install 8.5 'php8.5-fpm=8.5.12-1'
 }
 
+@test "PHP 7.4 Breaks conflict retries with verified PPA php-common" {
+  KW_PHP_APT_ORIGIN_KIND=ondrej
+  apt-get() {
+    [[ " $* " == *' php-common='* ]] || {
+      printf ' php-common : Breaks: php7.4-common but 1:7.4.33-31+ubuntu24.04.1+deb.sury.org+1 is to be installed\n' >&2
+      return 100
+    }
+    printf 'Inst php-common (2:101~+ubuntu24.04.1+deb.sury.org+1)\nInst php7.4-fpm (1:7.4.33-31+ubuntu24.04.1+deb.sury.org+1)\n'
+  }
+  kw_php_common_ppa_version() {
+    [ "$1" = 7.4 ] && [ -z "$2" ] || return 2
+    KW_PHP_COMMON_VERSION='2:101~+ubuntu24.04.1+deb.sury.org+1'
+    KW_PHP_COMMON_ORIGIN_URL='https://ppa.launchpadcontent.net/ondrej/php/ubuntu'
+  }
+  kw_php_simulate_install 7.4 'php7.4-fpm=1:7.4.33-31+ubuntu24.04.1+deb.sury.org+1'
+  [ "${KW_PHP_INSTALL_PACKAGES[0]}" = 'php-common=2:101~+ubuntu24.04.1+deb.sury.org+1' ]
+  apt-get() { printf 'E: unresolved conflict\n' >&2; return 100; }
+  ! kw_php_simulate_install 7.4 'php7.4-fpm=1:7.4.33-31+ubuntu24.04.1+deb.sury.org+1'
+  [ "${KW_PHP_INSTALL_PACKAGES[0]}" = 'php-common=2:101~+ubuntu24.04.1+deb.sury.org+1' ]
+}
+
+@test "unrelated PHP 7.4 APT conflict does not change php-common" {
+  KW_PHP_APT_ORIGIN_KIND=ondrej
+  apt-get() { printf 'E: unrelated dependency failure\n' >&2; return 100; }
+  kw_php_common_ppa_version() { return 99; }
+  ! kw_php_simulate_install 7.4 'php7.4-fpm=1:7.4.33-31+ubuntu24.04.1+deb.sury.org+1'
+  [ -z "$KW_PHP_INSTALL_PPA_COMMON" ]
+}
+
 @test "PHP security menu is read-only and key-only SSH remains unavailable" {
   run kw_catalog php
   [ "$status" -eq 0 ]

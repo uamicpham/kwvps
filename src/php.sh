@@ -309,14 +309,14 @@ kw_php_common_requirement() {
 
 kw_php_common_ppa_version() {
   local version=$1 required=$2 listings package candidate source best=''
-  [[ $required =~ ^[0-9]+:[0-9][A-Za-z0-9.+~_-]*$ ]] || return 2
+  [[ -z $required || $required =~ ^[0-9]+:[0-9][A-Za-z0-9.+~_-]*$ ]] || return 2
   listings=$(LC_ALL=C apt-cache madison php-common) || return 2
   while IFS='|' read -r package candidate source; do
     [[ $package =~ ^[[:space:]]*php-common[[:space:]]*$ ]] || continue
     candidate=${candidate//[[:space:]]/}
     [[ $candidate =~ ^[0-9]+:[0-9][A-Za-z0-9.+~_-]*$ ]] || continue
     [[ $source =~ https?://ppa\.launchpad(content)?\.net/ondrej/php/ubuntu/?([[:space:]]|$) ]] || continue
-    if dpkg --compare-versions "$candidate" ge "$required"; then
+    if [[ -z $required ]] || dpkg --compare-versions "$candidate" ge "$required"; then
       if [[ -z $best ]] || dpkg --compare-versions "$candidate" gt "$best"; then best=$candidate; fi
     fi
   done <<< "$listings"
@@ -328,23 +328,29 @@ kw_php_common_ppa_version() {
 }
 
 kw_php_simulate_install() {
-  local version=$1 required
+  local version=$1 required='' common_reason=''
   shift
   local -a packages=("$@")
   KW_PHP_INSTALL_PPA_COMMON=''
   if ! KW_PHP_INSTALL_SIMULATION=$(LC_ALL=C apt-get -s --no-remove --no-install-recommends install "${packages[@]}" 2>&1); then
-    if [[ $KW_PHP_APT_ORIGIN_KIND != ondrej ]] || ! kw_php_common_requirement "$KW_PHP_INSTALL_SIMULATION"; then
+    if [[ $KW_PHP_APT_ORIGIN_KIND == ondrej ]] && kw_php_common_requirement "$KW_PHP_INSTALL_SIMULATION"; then
+      required=$KW_PHP_COMMON_REQUIRED
+      common_reason="cần php-common >= $required"
+    elif [[ $version == 7.4 && $KW_PHP_APT_ORIGIN_KIND == ondrej ]] &&
+         grep -Eq '^ php-common[[:space:]]*:[[:space:]]*Breaks:[[:space:]]*php7\.4-common([[:space:]]|$)' <<< "$KW_PHP_INSTALL_SIMULATION"; then
+      common_reason='php-common hiện tại xung đột với php7.4-common'
+    else
       kw_log ERROR 'APT không mô phỏng được kế hoạch cài gói; chưa thay đổi VPS.'
       printf '%s\n' "$KW_PHP_INSTALL_SIMULATION"
       return 2
     fi
-    required=$KW_PHP_COMMON_REQUIRED
     kw_php_common_ppa_version "$version" "$required" || {
-      kw_log ERROR "Không tìm được php-common từ PPA Ondřej đạt phụ thuộc >= $required; không cài."
+      kw_log ERROR "Không tìm được php-common tương thích từ PPA Ondřej ($common_reason); không cài."
+      printf '%s\n' "$KW_PHP_INSTALL_SIMULATION"
       return 2
     }
     packages=("php-common=$KW_PHP_COMMON_VERSION" "${packages[@]}")
-    printf 'APT cần php-common >= %s; thử bản PPA %s từ %s.\n' "$required" "$KW_PHP_COMMON_VERSION" "$KW_PHP_COMMON_ORIGIN_URL"
+    printf 'APT %s; thử bản PPA %s từ %s.\n' "$common_reason" "$KW_PHP_COMMON_VERSION" "$KW_PHP_COMMON_ORIGIN_URL"
     KW_PHP_INSTALL_PPA_COMMON=$KW_PHP_COMMON_VERSION
     KW_PHP_INSTALL_SIMULATION=$(LC_ALL=C apt-get -s --no-remove --no-install-recommends install "${packages[@]}" 2>&1) || {
       kw_log ERROR 'APT vẫn không mô phỏng được sau khi chọn php-common PPA; không cài.'
