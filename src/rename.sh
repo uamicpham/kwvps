@@ -312,6 +312,7 @@ kw_site_rename_interactive() {
   if [[ $KW_SITE_PHP == 7.4 ]]; then
     printf 'CẢNH BÁO: site đang chạy PHP 7.4 đã hết hỗ trợ. Đổi tên sẽ giữ nguyên phiên bản EOL và rủi ro bảo mật của nó.\n'
     kw_prompt_yes_no_token 'Tôi hiểu và vẫn muốn đổi tên site đang dùng PHP 7.4?' 'RENAME-EOL-PHP:7.4' || return 0
+    # shellcheck disable=SC2034 # Read in the nested rename preflight.
     KW_PHP_EOL_SITE_ACK=1
   fi
   while :; do
