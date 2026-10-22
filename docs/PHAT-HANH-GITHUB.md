@@ -22,7 +22,7 @@ Script đóng gói theo danh sách file cho phép vào `dist/kwvps-x.y.z.tar.gz`
 
 ## Lệnh cài một dòng
 
-Chỉ công bố **sau khi** có `owner/repo`, tag và SHA-256 thật. Lệnh phải tải đúng asset của tag cố định qua HTTPS, kiểm tra SHA-256 **trước** khi giải nén/chạy `install.sh --apply`, rồi yêu cầu người dùng nhập `INSTALL KWVPS`. Không dùng `curl ... | bash` từ nhánh `main` đổi liên tục. VPS cần `curl`, `tar`, `sha256sum`, `sudo` hoặc quyền root và Ubuntu 24.04 sạch. Bộ cài tự kiểm tra xung đột, bản vá PHP 8.3 và không tự bật UFW/SSL.
+Lệnh cài chính thức và SHA-256 bootstrap đã xác minh nằm trong [README](../README.md#cài-bằng-một-dòng-trên-vps-mới). Lệnh tải bootstrap từ tag cố định qua HTTPS, kiểm tra SHA-256 **trước** khi chạy; bootstrap tiếp tục kiểm tra gói release và yêu cầu nhập `INSTALL KWVPS`. Không dùng `curl ... | bash` từ nhánh `main` đổi liên tục. VPS cần `curl`, `python3`, `tar`, `sha256sum`, `sudo` hoặc quyền root và Ubuntu 24.04 sạch. Bộ cài tự kiểm tra xung đột, bản vá PHP 8.3 và không tự bật UFW/SSL.
 
 Sau khi cài, chạy `kwvps --doctor` và `kwvps`. Gói release mang `release-repo` để bộ cài lưu nguồn GitHub công khai trong `/etc/kwvps/github-repo`; menu Update dùng GitHub Release API, chỉ chấp nhận bản mới hơn có SHA-256 hợp lệ do API trả về. Nếu repo private, thiết kế tải không dùng token hiện tại sẽ không hoạt động; cần thảo luận cơ chế phát hành riêng, không dán token vào lệnh cài.
 

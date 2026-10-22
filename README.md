@@ -10,7 +10,15 @@ KwVPS 0.50.0 đã có [GitHub Release](https://github.com/uamicpham/kwvps/releas
 
 Quản lý Sites có tạo, đổi tên miền HTTP nguyên bản, clone source/code, xóa với hai lựa chọn giữ vùng phục hồi/xóa sạch và phân lại quyền. Menu Backup có phục hồi hoặc xóa sạch gói site đã giữ. Tunnel/route thật đã được thử trên VPS lab; đổi tên site không tự cập nhật DNS/route Cloudflare hoặc URL ứng dụng. Các thao tác không xóa dùng xác nhận `y/N`; xóa yêu cầu gõ lại đối tượng. **Không cài đè lên VPS LarVPS, web stack có sẵn hoặc máy chứa website/dữ liệu.**
 
-Lệnh cài một dòng sẽ được công bố sau khi release `v0.50.1` và SHA-256 bootstrap được xác minh từ GitHub công khai. Lệnh tải bootstrap ghim tag + SHA-256, bootstrap tiếp tục xác minh gói release trước khi chạy installer. Không chạy trực tiếp mã từ nhánh `main` bằng `curl | bash`. Xem [quy trình phát hành](docs/PHAT-HANH-GITHUB.md).
+## Cài bằng một dòng trên VPS mới
+
+Chỉ chạy trên **Ubuntu Server 24.04 LTS sạch, x86_64, systemd**, có `curl`, `python3`, `tar`, `sha256sum` và quyền `sudo`/root. Không chạy trên VPS đã có website, LarVPS hay web stack khác. Bộ cài yêu cầu nhập `INSTALL KWVPS` trước khi cài package.
+
+```bash
+kwvps_tmp=''; kwvps_tmp=$(mktemp) && curl -fsSL --proto '=https' --tlsv1.2 'https://raw.githubusercontent.com/uamicpham/kwvps/v0.50.1/scripts/bootstrap-release.sh' -o "$kwvps_tmp" && printf '%s  %s\n' '8873fd8d6ae9c6b9207b8b2ebe2401b6b42d3bc3bf6d59f1548564f817e359f1' "$kwvps_tmp" | sha256sum -c - && sudo bash "$kwvps_tmp" --apply --release=v0.50.1; kwvps_rc=$?; if [ -n "$kwvps_tmp" ]; then rm -f -- "$kwvps_tmp"; fi; (exit "$kwvps_rc")
+```
+
+Lệnh xác minh SHA-256 của bootstrap lấy từ tag cố định, sau đó bootstrap xác minh gói release trước khi cài. Nếu VPS thiếu công cụ tải, cài `curl ca-certificates python3` bằng APT của Ubuntu trước. Sau khi cài chạy `kwvps --doctor`, rồi `kwvps`. Bản này chưa được thử cài mới đầu-cuối trên VPS trắng thứ hai; xem [giới hạn phát hành](docs/RELEASE-NOTES-0.50.1.md) và [quy trình phát hành](docs/PHAT-HANH-GITHUB.md).
 
 ## Chạy bản phát triển
 
