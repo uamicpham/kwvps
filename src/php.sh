@@ -36,6 +36,24 @@ kw_php_security_ready() {
   return 1
 }
 
+# PHP 7.4 is EOL and never qualifies as security-ready. Site workflows may use it
+# only after an explicit per-operation acknowledgement from the administrator.
+kw_php_site_ready() {
+  local version=${1:-}
+  if [[ $version == 7.4 ]]; then
+    kw_php_version_installed 7.4 || {
+      kw_log ERROR 'PHP 7.4 chưa được cài hoặc PHP-FPM chưa có cấu hình hợp lệ.'
+      return 1
+    }
+    [[ ${KW_PHP_EOL_SITE_ACK:-0} == 1 ]] || {
+      kw_log ERROR 'PHP 7.4 đã hết hỗ trợ; cần xác nhận cảnh báo EOL trước khi gắn vào site.'
+      return 1
+    }
+    return 0
+  fi
+  kw_php_security_ready "$version"
+}
+
 kw_php_security_status() {
   local version package status
   printf 'Trạng thái bản vá PHP-FPM cho CVE-2026-109618/109619:\n'
@@ -69,7 +87,11 @@ kw_php_choose_version() {
     if kw_php_version_installed "$version" && kw_php_security_ready "$version" >/dev/null 2>&1; then
       printf '%2d. PHP %s [đã cài, bản vá đạt]\n' "$i" "$version"
     elif kw_php_version_installed "$version"; then
-      printf '%2d. PHP %s [đã cài, CHƯA xác minh bản vá]\n' "$i" "$version"
+      if [[ $version == 7.4 ]]; then
+        printf '%2d. PHP 7.4 [đã cài, EOL — chỉ dùng nếu chấp nhận rủi ro]\n' "$i"
+      else
+        printf '%2d. PHP %s [đã cài, CHƯA xác minh bản vá]\n' "$i" "$version"
+      fi
     else
       printf '%2d. PHP %s [chưa cài]\n' "$i" "$version"
     fi
@@ -84,6 +106,17 @@ kw_php_choose_version() {
       continue
     fi
     KW_PHP_CHOICE=${versions[choice-1]}
+    if [[ $KW_PHP_CHOICE == 7.4 ]]; then
+      if kw_php_version_installed 7.4; then
+        printf 'CẢNH BÁO: PHP 7.4 đã hết hỗ trợ bảo mật. Dùng cho site có thể làm website dễ bị tấn công; hãy nâng cấp ứng dụng lên PHP còn hỗ trợ càng sớm càng tốt.\n'
+        if kw_prompt_yes_no_token 'Tôi hiểu rủi ro EOL và vẫn muốn dùng PHP 7.4 cho site này?' 'USE-EOL-PHP:7.4'; then
+          KW_PHP_EOL_SITE_ACK=1
+          return 0
+        fi
+      fi
+      printf 'PHP 7.4 chưa cài hoặc chưa xác nhận rủi ro; chọn lại hoặc 0 để quay lại.\n'
+      continue
+    fi
     if kw_php_version_installed "$KW_PHP_CHOICE" && kw_php_security_ready "$KW_PHP_CHOICE"; then return 0; fi
     printf 'PHP %s chưa cài hoặc chưa có bản vá được KwVPS xác minh; chọn phiên bản khác hoặc 0 để quay lại.\n' "$KW_PHP_CHOICE"
   done
@@ -196,7 +229,7 @@ kw_php_ondrej_enable() {
 
 kw_php_prepare_candidate() {
   local version=$1 candidate='' candidate_status
-  if ! kw_php_version_supported "$version" || [[ $version == 7.4 ]]; then return 2; fi
+  if ! kw_php_version_supported "$version"; then return 2; fi
   if kw_php_apt_candidate "$version"; then
     candidate=$KW_PHP_APT_CANDIDATE
     kw_php_candidate_provenance "$version" "$candidate" || {
@@ -228,7 +261,7 @@ kw_php_prepare_candidate() {
     }
     printf 'APT hiện chưa có PHP %s-FPM.\n' "$version"
   fi
-  [[ $version == 8.4 || $version == 8.5 ]] || {
+  [[ $version == 8.4 || $version == 8.5 || $version == 7.4 ]] || {
     kw_log ERROR "Không có candidate PHP $version đạt bản vá trong APT; không cài."; return 2;
   }
   printf 'Có thể dùng PPA Ubuntu ppa:ondrej/php (Ondřej Surý), KHÔNG dùng kho Debian deb.sury.org.\n'
@@ -242,9 +275,16 @@ kw_php_prepare_candidate() {
   kw_php_candidate_provenance "$version" "$candidate" || {
     kw_log ERROR "Candidate PHP $version ($candidate) có nguồn APT không được xác minh hoặc trùng giữa nhiều nguồn; không cài."; return 2;
   }
-  kw_php_package_version_safe "$version" "$candidate" || {
-    kw_log ERROR "PPA có PHP $version ($candidate) nhưng chưa đạt ngưỡng vá; không cài."; return 2;
-  }
+  if [[ $version == 7.4 ]]; then
+    [[ $KW_PHP_APT_ORIGIN_KIND == ondrej && $candidate =~ ^(1:)?7\.4\.[0-9]+[-+~A-Za-z0-9.]*$ ]] || {
+      kw_log ERROR "PPA không cung cấp candidate PHP 7.4 có nguồn/định dạng phiên bản được xác minh; không cài."; return 2;
+    }
+    printf 'CẢNH BÁO BẢO MẬT: PHP 7.4 đã hết hỗ trợ; KwVPS không thể xác minh bản vá cho các lỗ hổng hiện tại. Chỉ cài cho tương thích ứng dụng cũ, không khuyến nghị đưa website Internet vào phiên bản này.\n'
+  else
+    kw_php_package_version_safe "$version" "$candidate" || {
+      kw_log ERROR "PPA có PHP $version ($candidate) nhưng chưa đạt ngưỡng vá; không cài."; return 2;
+    }
+  fi
   printf 'Candidate sau cập nhật: PHP %s %s từ %s (%s)\n' "$version" "$candidate" "$KW_PHP_APT_ORIGIN_URL" "$KW_PHP_APT_ORIGIN_KIND"
   KW_PHP_APT_CANDIDATE=$candidate
 }
@@ -331,11 +371,19 @@ kw_php_install_interactive() {
     return 2
   fi
   printf 'Cài PHP-FPM và extension từ APT; PHP 8.4/8.5 có thể dùng PPA Ubuntu ppa:ondrej/php sau xác nhận.\n'
-  printf '1. PHP 8.5\n2. PHP 8.4\n3. PHP 8.3\n4. PHP 7.4 (EOL, đang chặn)\n0. Quay lại\nChọn: '
+  printf '1. PHP 8.5\n2. PHP 8.4\n3. PHP 8.3\n4. PHP 7.4 (EOL, chỉ PPA Ondřej; không khuyến nghị)\n0. Quay lại\nChọn: '
   IFS= read -r choice || return 0
   [[ $choice =~ ^[1-4]$ ]] || return 0
   version=${versions[choice-1]}
-  [[ $version != 7.4 ]] || { kw_log ERROR 'PHP 7.4 EOL và chưa có gói vá được KwVPS xác minh cho Ubuntu 24.04; không cài.'; return 2; }
+  if [[ $version == 7.4 ]]; then
+    printf '\nPHP 7.4 đã hết hỗ trợ bảo mật. Cài đặt chỉ phục vụ tương thích ứng dụng cũ; KwVPS sẽ không đánh dấu phiên bản này an toàn để tạo/chuyển site.\n'
+    kw_prompt_yes_no_token 'Tôi hiểu rủi ro và vẫn muốn cài PHP 7.4 từ PPA Ubuntu Ondřej?' 'INSTALL-EOL-PHP:7.4' || return 0
+    if ! kw_php_ondrej_repo_present; then
+      printf 'PHP 7.4 chỉ được lấy từ PPA Ubuntu ppa:ondrej/php; cần thêm nguồn này.\n'
+      kw_prompt_yes_no_token 'Thêm/cập nhật PPA Ondřej cho PHP 7.4?' 'PPA-PHP:7.4' || return 0
+      kw_php_ondrej_enable || return 2
+    fi
+  fi
   if kw_php_version_installed "$version" && kw_php_security_ready "$version"; then
     printf 'PHP %s đã cài và đạt kiểm tra bản vá; sẽ kiểm tra/bổ sung extension còn thiếu.\n' "$version"
   fi
@@ -367,13 +415,17 @@ kw_php_install_interactive() {
   kw_prompt_yes_no_token "Cài PHP $version và extension trên VPS?" "INSTALL-PHP:$version" || return 0
   DEBIAN_FRONTEND=noninteractive apt-get install -y --no-remove --no-install-recommends "${KW_PHP_INSTALL_PACKAGES[@]}" || return 1
   if ! kw_php_version_installed "$version" ||
-     ! kw_php_security_ready "$version" ||
+     { [[ $version != 7.4 ]] && ! kw_php_security_ready "$version"; } ||
      ! "php-fpm${version}" -t ||
      ! systemctl is-active --quiet "php${version}-fpm"; then
     kw_log ERROR "Đã chạy APT nhưng PHP $version chưa qua kiểm tra; không dùng cho site. Kiểm tra package và service."
     return 1
   fi
-  printf 'Đã cài PHP %s, bản vá đạt và PHP-FPM hoạt động.\n' "$version"
+  if [[ $version == 7.4 ]]; then
+    printf 'Đã cài PHP 7.4 từ PPA Ondřej; PHP-FPM hoạt động. Đây là phiên bản EOL, không được KwVPS xác nhận an toàn để chạy site Internet.\n'
+  else
+    printf 'Đã cài PHP %s, bản vá đạt và PHP-FPM hoạt động.\n' "$version"
+  fi
 }
 
 kw_php_backup_file() {
@@ -406,7 +458,7 @@ kw_php_switch_locked() (
   local domain=$1 version=$2 old old_pool new_pool meta backup_pool backup_meta tmp='' old_removed=0 new_added=0 meta_changed=0 committed=0 attempt
   ((EUID == 0)) || return 2
   kw_php_version_supported "$version" && kw_php_version_installed "$version" &&
-    kw_php_security_ready "$version" || return 2
+    kw_php_site_ready "$version" || return 2
   kw_site_lookup "$domain" || return 2
   old=$KW_SITE_PHP; old_pool=$KW_SITE_POOL; meta=$KW_SITE_META
   [[ $old != "$version" ]] || { printf 'Site đã dùng PHP %s.\n' "$version"; return 0; }
@@ -461,7 +513,7 @@ kw_php_switch() (
 )
 
 kw_php_switch_interactive() {
-  local domain version confirm
+  local domain version confirm KW_PHP_EOL_SITE_ACK=0
   kw_site_prompt_domain || return 0
   domain=$KW_SITE_CHOICE
   kw_php_choose_version || return 0

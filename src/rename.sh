@@ -304,9 +304,15 @@ kw_site_rename() (
 )
 
 kw_site_rename_interactive() {
-  local old new
+  local old new KW_PHP_EOL_SITE_ACK=0
   kw_site_prompt_domain || return 0
   old=$KW_SITE_CHOICE
+  kw_site_lookup "$old" || return 2
+  if [[ $KW_SITE_PHP == 7.4 ]]; then
+    printf 'CẢNH BÁO: site đang chạy PHP 7.4 đã hết hỗ trợ. Đổi tên sẽ giữ nguyên phiên bản EOL và rủi ro bảo mật của nó.\n'
+    kw_prompt_yes_no_token 'Tôi hiểu và vẫn muốn đổi tên site đang dùng PHP 7.4?' 'RENAME-EOL-PHP:7.4' || return 0
+    KW_PHP_EOL_SITE_ACK=1
+  fi
   while :; do
     printf 'Domain mới (0 để quay lại): '
     IFS= read -r new || return 0

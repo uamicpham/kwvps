@@ -343,7 +343,7 @@ kw_site_preflight() {
   for cmd in nginx "php-fpm${php}" systemctl useradd userdel install flock curl getent sha256sum; do
     kw_has "$cmd" || { kw_log ERROR "Thiếu $cmd."; return 2; }
   done
-  kw_php_security_ready "$php" || return 2
+  kw_php_site_ready "$php" || return 2
   [[ -r /etc/nginx/snippets/fastcgi-php.conf ]] || return 2
   if ! systemctl is-active --quiet nginx ||
     ! systemctl is-active --quiet "php${php}-fpm"; then
@@ -538,7 +538,7 @@ kw_site_create() (
 )
 
 kw_site_add_interactive() {
-  local domain php confirm choice name index
+  local domain php confirm choice name index KW_PHP_EOL_SITE_ACK=0
   kw_prompt_validated 'Domain/subdomain: ' kw_site_new_domain_valid \
     'Domain không hợp lệ, quá dài hoặc đã tồn tại/trùng site ID' plain || return 0
   domain=${KW_PROMPT_VALUE,,}
@@ -738,10 +738,16 @@ kw_site_clone() (
 )
 
 kw_site_clone_interactive() {
-  local source destination answer
+  local source destination answer KW_PHP_EOL_SITE_ACK=0
   printf 'Quản lý Sites / Nhân bản site / Chọn site nguồn để nhân bản\n'
   kw_site_prompt_domain || return 0
   source=$KW_SITE_CHOICE
+  kw_site_lookup "$source" || return 2
+  if [[ $KW_SITE_PHP == 7.4 ]]; then
+    printf 'CẢNH BÁO: site nguồn dùng PHP 7.4 đã hết hỗ trợ; site clone cũng sẽ dùng phiên bản EOL này.\n'
+    kw_prompt_yes_no_token 'Tôi hiểu rủi ro EOL và vẫn muốn nhân bản site bằng PHP 7.4?' 'CLONE-EOL-PHP:7.4' || return 0
+    KW_PHP_EOL_SITE_ACK=1
+  fi
   # shellcheck disable=SC2016 # Backticks are literal menu typography.
   printf 'Nhập `0` để quay lại hoặc Ctrl+C để thoát.\n'
   while :; do

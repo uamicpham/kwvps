@@ -57,7 +57,7 @@ Menu **Sao lưu/phục hồi** liệt kê backup source/code và backup cấu h�
 
 Menu chính hiển thị header VPS một lần; menu con không lặp header. Trên terminal tương tác, chọn mục sẽ chuyển sang màn hình gọn của mục đó. Những thao tác site/DB/backup hiện liệt kê mục đánh số để chọn thay vì buộc gõ tên; thao tác ghi vẫn cần nhập lại domain để xác nhận.
 
-**Quản lý PHP** hiển thị bốn lựa chọn theo thứ tự 8.5, 8.4, 8.3, 7.4 và ghi rõ bản nào đã cài/đạt bản vá. Mục **Cài gói PHP-FPM** chỉ thêm PPA Ubuntu `ppa:ondrej/php` sau xác nhận `y/N` khi kho hiện tại thiếu bản an toàn; xem candidate, nguồn và mô phỏng APT trước khi cài. Trên VPS lab đã cài 8.4.27 và 8.5.12 từ PPA, cùng `php-common` dùng chung; mặc định `php` CLI chuyển sang 8.5, còn FPM/site 8.3 giữ nguyên. Đã tạo site `.test` bằng PHP 8.4, chuyển sang 8.5, kiểm HTTP 200 rồi xóa sạch site thử. PHP 7.4 EOL vẫn bị chặn. Custom pool qua nano có backup/test/rollback nhưng chưa thử phiên nano tương tác.
+**Quản lý PHP** hiển thị bốn lựa chọn theo thứ tự 8.5, 8.4, 8.3, 7.4 và ghi rõ bản nào đã cài/đạt bản vá. Mục **Cài gói PHP-FPM** chỉ thêm PPA Ubuntu `ppa:ondrej/php` sau xác nhận `y/N`; xem candidate, nguồn và mô phỏng APT trước khi cài. PHP 7.4 có thể cài từ PPA rồi chọn khi tạo, clone, đổi tên hoặc chuyển site; mỗi thao tác yêu cầu xác nhận cảnh báo EOL. KwVPS không xác minh PHP 7.4 an toàn, chỉ cân nhắc cho ứng dụng cũ và không khuyến nghị website Internet. Trên VPS lab đã cài 8.4.27 và 8.5.12 từ PPA, cùng `php-common` dùng chung; mặc định `php` CLI chuyển sang 8.5, còn FPM/site 8.3 giữ nguyên. Đã tạo site `.test` bằng PHP 8.4, chuyển sang 8.5, kiểm HTTP 200 rồi xóa sạch site thử. Custom pool qua nano có backup/test/rollback nhưng chưa thử phiên nano tương tác.
 
 ## SSL thử nghiệm
 

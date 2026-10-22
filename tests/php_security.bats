@@ -31,6 +31,15 @@ setup() {
   ! kw_php_package_version_safe 8.5 '8.5.12;id'
 }
 
+@test "PHP 7.4 may attach to a site only after a visible EOL acknowledgement" {
+  kw_php_version_installed() { [[ $1 == 7.4 ]]; }
+  KW_PHP_EOL_SITE_ACK=0
+  ! kw_php_site_ready 7.4
+  KW_PHP_EOL_SITE_ACK=1
+  kw_php_site_ready 7.4
+  ! kw_php_package_version_safe 7.4 1:7.4.33-99+ubuntu24.04.1+deb.sury.org+1
+}
+
 @test "APT candidate parser handles missing package without installing anything" {
   apt-cache() { printf 'php8.4-fpm:\n  Installed: (none)\n  Candidate: (none)\n'; }
   ! kw_php_apt_candidate 8.4
@@ -64,14 +73,26 @@ setup() {
   ! kw_php_candidate_provenance 8.4 8.4.27-1
 }
 
-@test "safe configured candidate needs no PPA; PHP 7.4 never enters install path" {
+@test "safe configured candidate needs no PPA; PHP 7.4 fallback is available only from Ondrej" {
   kw_php_apt_candidate() { KW_PHP_APT_CANDIDATE=8.5.12-1; }
   kw_php_candidate_provenance() { KW_PHP_APT_ORIGIN_KIND=ondrej; KW_PHP_APT_ORIGIN_URL=https://ppa.launchpadcontent.net/ondrej/php/ubuntu; }
   kw_php_ondrej_pin_matches() { return 0; }
   kw_php_ondrej_enable() { printf 'unexpected PPA call\n' >&2; return 99; }
   kw_php_prepare_candidate 8.5
   [ "$KW_PHP_APT_CANDIDATE" = 8.5.12-1 ]
-  ! kw_php_prepare_candidate 7.4
+  MOCK_74_PPA=0
+  kw_php_apt_candidate() {
+    [[ $MOCK_74_PPA == 1 ]] || return 1
+    KW_PHP_APT_CANDIDATE=1:7.4.33-18+ubuntu24.04.1+deb.sury.org+1
+  }
+  kw_php_ondrej_enable() { MOCK_74_PPA=1; }
+  kw_php_candidate_provenance() {
+    [[ $MOCK_74_PPA == 1 ]] || return 2
+    KW_PHP_APT_ORIGIN_KIND=ondrej
+    KW_PHP_APT_ORIGIN_URL=https://ppa.launchpadcontent.net/ondrej/php/ubuntu
+  }
+  kw_php_prepare_candidate 7.4 <<< 'y'
+  [ "$KW_PHP_APT_CANDIDATE" = '1:7.4.33-18+ubuntu24.04.1+deb.sury.org+1' ]
 }
 
 @test "already configured PPA needs y before adding low-priority pin and rechecks candidate" {
