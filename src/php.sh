@@ -513,6 +513,7 @@ kw_php_switch() (
 )
 
 kw_php_switch_interactive() {
+  # shellcheck disable=SC2034 # Read by the nested PHP switch transaction.
   local domain version confirm KW_PHP_EOL_SITE_ACK=0
   kw_site_prompt_domain || return 0
   domain=$KW_SITE_CHOICE

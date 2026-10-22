@@ -538,6 +538,7 @@ kw_site_create() (
 )
 
 kw_site_add_interactive() {
+  # shellcheck disable=SC2034 # Read by the nested site preflight to require EOL acknowledgement.
   local domain php confirm choice name index KW_PHP_EOL_SITE_ACK=0
   kw_prompt_validated 'Domain/subdomain: ' kw_site_new_domain_valid \
     'Domain không hợp lệ, quá dài hoặc đã tồn tại/trùng site ID' plain || return 0
@@ -738,6 +739,7 @@ kw_site_clone() (
 )
 
 kw_site_clone_interactive() {
+  # shellcheck disable=SC2034 # Read by the nested clone/site preflight.
   local source destination answer KW_PHP_EOL_SITE_ACK=0
   printf 'Quản lý Sites / Nhân bản site / Chọn site nguồn để nhân bản\n'
   kw_site_prompt_domain || return 0

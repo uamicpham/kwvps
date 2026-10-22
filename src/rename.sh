@@ -304,6 +304,7 @@ kw_site_rename() (
 )
 
 kw_site_rename_interactive() {
+  # shellcheck disable=SC2034 # Read by the nested rename preflight/transaction.
   local old new KW_PHP_EOL_SITE_ACK=0
   kw_site_prompt_domain || return 0
   old=$KW_SITE_CHOICE
