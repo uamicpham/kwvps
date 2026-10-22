@@ -22,11 +22,11 @@ Script đóng gói theo danh sách file cho phép vào `dist/kwvps-x.y.z.tar.gz`
 
 ## Lệnh cài một dòng
 
-Lệnh cài chính thức và SHA-256 bootstrap đã xác minh nằm trong [README](../README.md#cài-bằng-một-dòng-trên-vps-mới). Lệnh tải bootstrap từ tag cố định qua HTTPS, kiểm tra SHA-256 **trước** khi chạy; bootstrap tiếp tục kiểm tra gói release và yêu cầu nhập `INSTALL KWVPS`. Không dùng `curl ... | bash` từ nhánh `main` đổi liên tục. VPS cần `curl`, `python3`, `tar`, `sha256sum`, `sudo` hoặc quyền root và Ubuntu 24.04 sạch. Bộ cài tự kiểm tra xung đột, bản vá PHP 8.3 và không tự bật UFW/SSL.
+Lệnh cài ngắn và lệnh ghim phiên bản có xác minh SHA-256 bootstrap nằm trong [README](../README.md#cài-bằng-một-dòng-trên-vps-mới). Lệnh ngắn dùng bootstrap từ tag `v0.50.1` và chọn release mới nhất; bootstrap kiểm tra SHA-256 của gói trước khi cài, nhưng lệnh ngắn không xác minh checksum của chính bootstrap. Lệnh dài kiểm tra checksum bootstrap trước khi chạy và ghim release `v0.50.1`. Không tải script trực tiếp từ nhánh `main` đổi liên tục. VPS cần `curl`, `python3`, `tar`, `sha256sum`, `sudo` hoặc quyền root và Ubuntu 24.04 sạch. Bộ cài tự kiểm tra xung đột, bản vá PHP 8.3, hỏi `INSTALL KWVPS` và không tự bật UFW/SSL.
 
 Sau khi cài, chạy `kwvps --doctor` và `kwvps`. Gói release mang `release-repo` để bộ cài lưu nguồn GitHub công khai trong `/etc/kwvps/github-repo`; menu Update dùng GitHub Release API, chỉ chấp nhận bản mới hơn có SHA-256 hợp lệ do API trả về. Nếu repo private, thiết kế tải không dùng token hiện tại sẽ không hoạt động; cần thảo luận cơ chế phát hành riêng, không dán token vào lệnh cài.
 
-`scripts/bootstrap-release.sh` tải release public, xác minh SHA-256 và kiểm tra archive trước khi chạy installer. **Không** hướng dẫn người dùng `curl | bash` trực tiếp từ nhánh `main`: bản thân bootstrap được ghim bằng tag và checksum trong lệnh một dòng công bố. Release workflow chỉ xuất bản nếu syntax, smoke, ShellCheck, Bats, Python và kiểm tra checksum gói đều đạt.
+`scripts/bootstrap-release.sh` tải release public, xác minh SHA-256 và kiểm tra archive trước khi chạy installer. Lệnh ngắn cố định tag của bootstrap nhưng không kiểm tra checksum bootstrap; lệnh dài kiểm tra checksum. Release workflow chỉ xuất bản nếu syntax, smoke, ShellCheck, Bats, Python và kiểm tra checksum gói đều đạt.
 
 ## Điều kiện phát hành
 
