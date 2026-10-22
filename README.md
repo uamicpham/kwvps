@@ -6,11 +6,11 @@ Sau khi cài, lệnh mở menu là `kwvps`.
 
 ## Trạng thái
 
-Mã nguồn đang chuẩn bị bản `0.50.0`. VPS thử nghiệm vẫn chạy `0.49.2-dev` cho tới khi gói release được tạo và kiểm thử. PHP 8.3 (Ubuntu), 8.4 và 8.5 (PPA Ubuntu Ondřej) đã chạy trên lab. Menu Update dùng GitHub Release công khai có SHA-256, và làm mới APT trước khi lên kế hoạch cập nhật package. Giới hạn từng chức năng xem [bảng trạng thái](docs/TRANG-THAI-CHUC-NANG.md) và [ghi chú phát hành](docs/RELEASE-NOTES-0.50.0.md).
+KwVPS 0.50.0 đã có [GitHub Release](https://github.com/uamicpham/kwvps/releases/tag/v0.50.0). Bản 0.50.1 đang bổ sung kiểm tra kiến trúc và ghim release cho lệnh cài một dòng. VPS thử nghiệm vẫn chạy `0.49.2-dev`, không bị cài đè. PHP 8.3 (Ubuntu), 8.4 và 8.5 (PPA Ubuntu Ondřej) đã chạy trên lab. Giới hạn từng chức năng xem [bảng trạng thái](docs/TRANG-THAI-CHUC-NANG.md) và [ghi chú phát hành](docs/RELEASE-NOTES-0.50.1.md).
 
 Quản lý Sites có tạo, đổi tên miền HTTP nguyên bản, clone source/code, xóa với hai lựa chọn giữ vùng phục hồi/xóa sạch và phân lại quyền. Menu Backup có phục hồi hoặc xóa sạch gói site đã giữ. Tunnel/route thật đã được thử trên VPS lab; đổi tên site không tự cập nhật DNS/route Cloudflare hoặc URL ứng dụng. Các thao tác không xóa dùng xác nhận `y/N`; xóa yêu cầu gõ lại đối tượng. **Không cài đè lên VPS LarVPS, web stack có sẵn hoặc máy chứa website/dữ liệu.**
 
-Lệnh cài một dòng sẽ được công bố tại đây khi [GitHub Release](https://github.com/uamicpham/kwvps/releases) `v0.50.0` đã tạo và kiểm thử thành công. Lệnh tải bootstrap ghim tag + SHA-256, bootstrap tiếp tục xác minh gói release trước khi chạy installer. Không chạy trực tiếp mã từ nhánh `main` bằng `curl | bash`. Xem [quy trình phát hành](docs/PHAT-HANH-GITHUB.md).
+Lệnh cài một dòng sẽ được công bố sau khi release `v0.50.1` và SHA-256 bootstrap được xác minh từ GitHub công khai. Lệnh tải bootstrap ghim tag + SHA-256, bootstrap tiếp tục xác minh gói release trước khi chạy installer. Không chạy trực tiếp mã từ nhánh `main` bằng `curl | bash`. Xem [quy trình phát hành](docs/PHAT-HANH-GITHUB.md).
 
 ## Chạy bản phát triển
 
@@ -63,7 +63,7 @@ Với VPS thử nghiệm **đã cài KwVPS**, kiểm tra bản mã mới bằng 
 - Nginx: phục hồi vhost HTTP gốc của site KwVPS và áp baseline global (`server_tokens off`, giới hạn body 32 MB). Có bản sao root-only và kiểm tra cấu hình/reload; từ chối ghi đè vhost có SSL.
 - Cron: xem `/etc/crontab` và crontab của root; mở crontab root bằng nano sau khi lưu bản sao root-only. Không tự chỉnh file trong `/etc/cron.d`.
 
-Chưa hoàn tất phát hành GitHub vì chưa có repository/release thực tế; mã cập nhật chỉ kích hoạt đường GitHub sau khi cấu hình repo public trong menu. Tự đẩy IP vi phạm từ log Nginx lên Cloudflare và xác minh Real IP cho traffic qua Tunnel ở Nginx vẫn cần kiểm thử đầy đủ. Tunnel đã chạy và route thật trả HTTPS 200; inbound 80/443 đóng, thử gia hạn HTTP-01 qua Tunnel thành công. Cloudflare Rate Limiting toàn zone trên Free đã vượt qua API dry-run; chưa tạo rule thật vì cần người dùng chọn mức và xác nhận `y/N`. SSH port/key-only tạm gác theo yêu cầu. Đổi tên site chỉ áp dụng vhost HTTP nguyên bản; đổi ACME provider chỉ ảnh hưởng lần cấp mới và ZeroSSL cần EAB riêng. ionCube đã có đường cài theo version nhưng chưa thử với loader thật. Cache FastCGI đã thử trên site lab, chưa thử ứng dụng thật. Backup cấu hình domain hiện không gồm source, DB, SSL private key hay tài nguyên Cloudflare. Menu các mục chưa có ghi rõ **chưa triển khai**.
+GitHub Release công khai đã hoạt động; menu Update dùng đường GitHub sau khi cấu hình `uamicpham/kwvps` trong menu. Tự đẩy IP vi phạm từ log Nginx lên Cloudflare và Real IP qua Tunnel vẫn cần kiểm thử đầy đủ. Tunnel/route thật đã trả HTTPS 200; inbound 80/443 đóng và gia hạn HTTP-01 qua Tunnel đã thử. Cloudflare Rate Limiting Free mới qua API dry-run, chưa tạo rule thật. SSH đổi port/key-only tạm gác; ionCube chưa thử loader thật. Backup cấu hình domain không gồm source, DB, SSL private key hay token Cloudflare. Các menu còn thiếu hiển thị rõ giới hạn.
 
 ## Kiểm thử
 

@@ -5,21 +5,44 @@
 set -Eeuo pipefail
 readonly KW_RELEASE_REPO=uamicpham/kwvps
 
-case "${1:-}" in
-  --check|--apply) (($# == 1)) || exit 2 ;;
-  *) printf 'Dùng: bash bootstrap-release.sh --check|--apply\n' >&2; exit 2 ;;
-esac
-for tool in curl python3 sha256sum tar mktemp; do
+usage() {
+  printf 'Dùng: bash bootstrap-release.sh --check|--apply [--release=vX.Y.Z]\n' >&2
+  exit 2
+}
+action='' requested_tag=''
+for argument in "$@"; do
+  case "$argument" in
+    --check|--apply)
+      [[ -z $action ]] || usage
+      action=$argument ;;
+    --release=*)
+      [[ -z $requested_tag ]] || usage
+      requested_tag=${argument#--release=}
+      [[ $requested_tag =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || usage ;;
+    *) usage ;;
+  esac
+done
+[[ -n $action ]] || usage
+for tool in curl python3 sha256sum tar mktemp uname; do
   command -v "$tool" >/dev/null 2>&1 || {
     printf 'Thiếu công cụ %s. Chưa tải hoặc cài KwVPS.\n' "$tool" >&2
     exit 2
   }
 done
+[[ $(uname -m) == x86_64 ]] || {
+  printf 'Kiến trúc chưa hỗ trợ; cần x86_64. Chưa tải hoặc cài KwVPS.\n' >&2
+  exit 2
+}
+
+release_endpoint="https://api.github.com/repos/$KW_RELEASE_REPO/releases/latest"
+if [[ -n $requested_tag ]]; then
+  release_endpoint="https://api.github.com/repos/$KW_RELEASE_REPO/releases/tags/$requested_tag"
+fi
 
 release_json=$(curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 \
   --connect-timeout 10 --max-time 30 --max-filesize 1048576 \
   -H 'Accept: application/vnd.github+json' \
-  "https://api.github.com/repos/$KW_RELEASE_REPO/releases/latest") || {
+  "$release_endpoint") || {
     printf 'Không lấy được bản phát hành ổn định mới nhất từ GitHub.\n' >&2
     exit 1
   }
@@ -40,6 +63,10 @@ except (KeyError,TypeError,ValueError) as error:
     sys.exit(2)' <<< "$release_json") || exit 2
 tag=${release_info%%|*}
 digest=${release_info#*|}
+[[ -z $requested_tag || $tag == "$requested_tag" ]] || {
+  printf 'GitHub trả về tag khác bản đã chọn; đã dừng.\n' >&2
+  exit 2
+}
 version=${tag#v}
 archive_name="kwvps-${version}.tar.gz"
 [[ $digest =~ ^[0-9a-f]{64}$ ]] || exit 2
@@ -87,4 +114,4 @@ tar -xzf "$archive" -C "$stage" --no-same-owner --no-same-permissions || exit 2
 [[ $(< "$stage/kwvps/release-repo") == "$KW_RELEASE_REPO" ]] || exit 2
 [[ $(bash "$stage/kwvps/kwvps" --version) == "KwVPS $version" ]] || exit 2
 printf 'Đã xác minh KwVPS %s từ GitHub Release (%s).\n' "$version" "$KW_RELEASE_REPO"
-bash "$stage/kwvps/install.sh" "$1"
+bash "$stage/kwvps/install.sh" "$action"

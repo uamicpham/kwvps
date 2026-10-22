@@ -69,6 +69,8 @@ install_preflight() {
   kw_os_show
   if kw_os_supported ''; then printf '[OK] Ubuntu 24.04\n';
   else printf '[STOP] Cần Ubuntu 24.04\n'; failed=1; fi
+  if [[ $(uname -m) == x86_64 ]]; then printf '[OK] x86_64\n';
+  else printf '[STOP] Kiến trúc này chưa được hỗ trợ; cần x86_64.\n'; failed=1; fi
   if [[ -d /run/systemd/system ]]; then printf '[OK] systemd\n';
   else printf '[STOP] systemd chưa chạy\n'; failed=1; fi
   if install_existing_panel; then

@@ -2,7 +2,7 @@
 
 ## Trạng thái
 
-Mã nguồn đang chuẩn bị bản `0.50.0` tại [uamicpham/kwvps](https://github.com/uamicpham/kwvps). Chỉ công bố lệnh cài một dòng khi tag `v0.50.0`, GitHub Release và kiểm thử gói tải đều thành công. Bản cài mới chỉ hỗ trợ VPS Ubuntu Server 24.04 sạch; không cài đè LarVPS hay web stack khác.
+KwVPS 0.50.0 đã phát hành tại [uamicpham/kwvps](https://github.com/uamicpham/kwvps). Bản 0.50.1 chốt lệnh cài một dòng ghim tag và SHA-256 bootstrap. Bản cài mới chỉ hỗ trợ VPS Ubuntu Server 24.04 sạch, x86_64 và systemd; không cài đè LarVPS hay web stack khác.
 
 ## Chuẩn bị GitHub
 

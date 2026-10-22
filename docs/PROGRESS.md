@@ -1,5 +1,10 @@
 # Tiến độ KwVPS
 
+## 0.50.1 — bộ cài ghim release, 22/10/2026
+
+- GitHub Release `v0.50.0` đã tạo công khai; bản 0.50.1 bổ sung kiểm tra x86_64 và cho bootstrap chọn tag cố định. 531 smoke, 9 system, 172 Bats, 2 Python, ShellCheck và checksum package đã đạt trên bản sao ở VPS lab.
+- Chưa cài mới đầu-cuối trên VPS trắng thứ hai. VPS lab đang chạy 0.49.2-dev và không bị cài đè.
+
 ## 0.50.0 — ứng viên phát hành Ubuntu 24.04, 22/10/2026
 
 - Giới hạn bộ cài một dòng cho Ubuntu Server 24.04 LTS sạch, x86_64 và systemd. Gói sẽ được xuất bản từ GitHub Actions theo tag sau khi toàn bộ kiểm thử đạt; lệnh cài sẽ ghim checksum bootstrap và xác minh SHA-256 gói phát hành.
