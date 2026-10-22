@@ -25,7 +25,7 @@ readonly -a KW_INSTALL_MODULES=(
 
 install_usage() {
   printf '%s\n' \
-    'KwVPS installer — chỉ cho VPS thử nghiệm Ubuntu 24.04 mới.' \
+    'KwVPS installer — chỉ cho VPS Ubuntu Server 24.04 LTS sạch.' \
     'bash install.sh --check   Kiểm tra điều kiện (không thay đổi máy)' \
     'sudo bash install.sh --apply   Cài package nền tảng và lệnh kwvps' \
     'Bản release GitHub được tải và kiểm tra SHA-256 trước khi gọi bộ cài.'

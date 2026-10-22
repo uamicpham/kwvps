@@ -93,7 +93,7 @@ kw_header() {
   fi
   printf 'Disk: %s | Ram: %s | Ngay: %s\n' "$disk" "$(kw_memory /proc/meminfo)" "$(date +%F)"
   printf 'Disk của filesystem gốc (/); GB/MB tính theo hệ 1024.\n'
-  printf 'Bản phát triển: thao tác thay đổi VPS cần sudo và xác nhận.\n'
+  printf 'Thao tác thay đổi VPS cần quyền root và xác nhận.\n'
 }
 
 kw_doctor() {

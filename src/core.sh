@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Shared primitives. No writes, network access, eval, or automatic sudo.
-readonly KW_VERSION='0.49.2-dev'
+readonly KW_VERSION='0.50.0'
 KW_PREVIEW=0
 
 kw_log() {
@@ -9,7 +9,7 @@ kw_log() {
 
 kw_help() {
   printf '%s\n' \
-    'KwVPS — bản phát triển, quản lý site trên Ubuntu 24.04 thử nghiệm' \
+    'KwVPS — quản lý site trên Ubuntu Server 24.04 LTS sạch' \
     'bash kwvps                     Menu tương tác (Linux)' \
     'bash kwvps --preview           Xem menu, không gọi công cụ quản trị' \
     'bash kwvps --status            Thông tin hệ thống' \

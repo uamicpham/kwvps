@@ -16,7 +16,7 @@ source "$KW_UPGRADE_ROOT/src/updates.sh"
 
 upgrade_usage() {
   printf '%s\n' \
-    'KwVPS upgrade — chỉ cho bản KwVPS đã cài trên VPS thử nghiệm Ubuntu 24.04.' \
+    'KwVPS upgrade — cho bản KwVPS đã cài trên Ubuntu Server 24.04 LTS.' \
     'bash upgrade.sh --check' \
     'sudo bash upgrade.sh --apply --confirm=UPGRADE-KWVPS' \
     'Giữ nguyên site, /etc/kwvps, backup và service; lưu bản mã cũ tại /opt/kwvps-previous-*.'

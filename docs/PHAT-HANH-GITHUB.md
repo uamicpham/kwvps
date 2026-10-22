@@ -2,7 +2,7 @@
 
 ## Trạng thái
 
-Mã nguồn hiện là bản `0.49.2-dev`. Repository đã được người dùng cung cấp: [uamicpham/kwvps](https://github.com/uamicpham/kwvps). **Chưa có release chính thức hoặc lệnh cài một dòng thực tế**. Không dùng đường dẫn ví dụ để chạy trên VPS. Bản cài mới chỉ hỗ trợ VPS Ubuntu Server 24.04 sạch; không cài đè LarVPS hay web stack khác.
+Mã nguồn đang chuẩn bị bản `0.50.0` tại [uamicpham/kwvps](https://github.com/uamicpham/kwvps). Chỉ công bố lệnh cài một dòng khi tag `v0.50.0`, GitHub Release và kiểm thử gói tải đều thành công. Bản cài mới chỉ hỗ trợ VPS Ubuntu Server 24.04 sạch; không cài đè LarVPS hay web stack khác.
 
 ## Chuẩn bị GitHub
 
@@ -26,7 +26,7 @@ Chỉ công bố **sau khi** có `owner/repo`, tag và SHA-256 thật. Lệnh ph
 
 Sau khi cài, chạy `kwvps --doctor` và `kwvps`. Gói release mang `release-repo` để bộ cài lưu nguồn GitHub công khai trong `/etc/kwvps/github-repo`; menu Update dùng GitHub Release API, chỉ chấp nhận bản mới hơn có SHA-256 hợp lệ do API trả về. Nếu repo private, thiết kế tải không dùng token hiện tại sẽ không hoạt động; cần thảo luận cơ chế phát hành riêng, không dán token vào lệnh cài.
 
-`scripts/bootstrap-release.sh` đã được chuẩn bị để tải release public, xác minh SHA-256 và kiểm tra archive trước khi chạy installer. **Không** hướng dẫn người dùng `curl | bash` trực tiếp từ nhánh `main`: bản thân bootstrap phải được ghim bằng commit và checksum trong lệnh một dòng được công bố. Bản `-dev` hiện tại cố ý chưa tạo release ổn định.
+`scripts/bootstrap-release.sh` tải release public, xác minh SHA-256 và kiểm tra archive trước khi chạy installer. **Không** hướng dẫn người dùng `curl | bash` trực tiếp từ nhánh `main`: bản thân bootstrap được ghim bằng tag và checksum trong lệnh một dòng công bố. Release workflow chỉ xuất bản nếu syntax, smoke, ShellCheck, Bats, Python và kiểm tra checksum gói đều đạt.
 
 ## Điều kiện phát hành
 

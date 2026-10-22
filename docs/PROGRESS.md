@@ -1,5 +1,11 @@
 # Tiến độ KwVPS
 
+## 0.50.0 — ứng viên phát hành Ubuntu 24.04, 22/10/2026
+
+- Giới hạn bộ cài một dòng cho Ubuntu Server 24.04 LTS sạch, x86_64 và systemd. Gói sẽ được xuất bản từ GitHub Actions theo tag sau khi toàn bộ kiểm thử đạt; lệnh cài sẽ ghim checksum bootstrap và xác minh SHA-256 gói phát hành.
+- Sửa menu Tunnel cho phép xem hướng dẫn/thoát bằng tài khoản thường, vẫn giữ kiểm tra root ở các hành động ghi. Đây là nguyên nhân Bats trên GitHub (runner không phải root) thất bại; 167/167 Bats đã đạt trên VPS lab khi chạy bằng tài khoản `nobody`.
+- Chưa tạo tag hoặc công bố lệnh cài ở thời điểm ghi mục này. Chưa chạy cài mới đầu-cuối trên VPS thứ hai sạch; không coi các bài test unit là thay thế kiểm thử cài mới thực tế.
+
 ## 0.49.2-dev — Menu, cập nhật và chuẩn bị phát hành, 22/10/2026
 
 - Đã căn lại tiêu đề/breadcrumb tiếng Việt, đường kẻ và hướng dẫn thao tác menu. Menu con không lặp thông tin tài nguyên VPS.

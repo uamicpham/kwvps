@@ -1,16 +1,16 @@
 # KwVPS
 
-Dự án script quản lý VPS, ưu tiên Ubuntu Server 24.04 LTS.
+Dự án script quản lý VPS cho **Ubuntu Server 24.04 LTS sạch, x86_64 và systemd**.
 
-Sau khi cài trên VPS thử nghiệm, lệnh mở menu là `kwvps`.
+Sau khi cài, lệnh mở menu là `kwvps`.
 
 ## Trạng thái
 
-VPS thử nghiệm đang chạy `0.49.2-dev`. PHP 8.3 (Ubuntu), 8.4 và 8.5 (PPA Ubuntu Ondřej) đã cài; tạo site PHP 8.4 và chuyển sang 8.5 đã được thử trên site `.test`. Menu Logs có dọn theo phạm vi và hiển thị thư mục đã xử lý. Menu Update có đường kiểm tra GitHub Release công khai bằng SHA-256 và làm mới APT trước khi lập kế hoạch nâng package; đường GitHub chưa thử đầu-cuối vì chưa có release thật trên [repository KwVPS](https://github.com/uamicpham/kwvps). Mục ionCube tạm bỏ qua kiểm thử loader thật; SSH port/key-only vẫn tạm gác. Trạng thái từng nhóm xem [bảng chức năng](docs/TRANG-THAI-CHUC-NANG.md).
+Mã nguồn đang chuẩn bị bản `0.50.0`. VPS thử nghiệm vẫn chạy `0.49.2-dev` cho tới khi gói release được tạo và kiểm thử. PHP 8.3 (Ubuntu), 8.4 và 8.5 (PPA Ubuntu Ondřej) đã chạy trên lab. Menu Update dùng GitHub Release công khai có SHA-256, và làm mới APT trước khi lên kế hoạch cập nhật package. Giới hạn từng chức năng xem [bảng trạng thái](docs/TRANG-THAI-CHUC-NANG.md) và [ghi chú phát hành](docs/RELEASE-NOTES-0.50.0.md).
 
-Quản lý Sites có tạo, đổi tên miền HTTP nguyên bản, clone source/code, xóa với hai lựa chọn giữ vùng phục hồi/xóa sạch và phân lại quyền. Menu Backup có phục hồi hoặc xóa sạch gói site đã giữ. Tunnel/route thật đã được thử trên VPS lab; đổi tên site không tự cập nhật DNS/route Cloudflare hoặc URL ứng dụng. Các thao tác không xóa dùng xác nhận `y/N`; xóa yêu cầu gõ lại đối tượng. Có bộ cài và đường nâng cấp cục bộ cho VPS thử nghiệm; chưa có repository GitHub hay bản phát hành. Đây **không phải bản cài chính thức**. Không cài lên VPS LarVPS đang phục vụ website thật.
+Quản lý Sites có tạo, đổi tên miền HTTP nguyên bản, clone source/code, xóa với hai lựa chọn giữ vùng phục hồi/xóa sạch và phân lại quyền. Menu Backup có phục hồi hoặc xóa sạch gói site đã giữ. Tunnel/route thật đã được thử trên VPS lab; đổi tên site không tự cập nhật DNS/route Cloudflare hoặc URL ứng dụng. Các thao tác không xóa dùng xác nhận `y/N`; xóa yêu cầu gõ lại đối tượng. **Không cài đè lên VPS LarVPS, web stack có sẵn hoặc máy chứa website/dữ liệu.**
 
-Mục tiêu của bản phát hành chính thức: trên VPS sạch, cài KwVPS bằng **một dòng lệnh lấy bản release từ GitHub**; sau đó mở menu bằng `kwvps`. URL/lệnh thật chỉ được công bố khi đã có repository và bản release kiểm thử đạt. Xem [quy trình phát hành](docs/PHAT-HANH-GITHUB.md).
+Lệnh cài một dòng sẽ được công bố tại đây khi [GitHub Release](https://github.com/uamicpham/kwvps/releases) `v0.50.0` đã tạo và kiểm thử thành công. Lệnh tải bootstrap ghim tag + SHA-256, bootstrap tiếp tục xác minh gói release trước khi chạy installer. Không chạy trực tiếp mã từ nhánh `main` bằng `curl | bash`. Xem [quy trình phát hành](docs/PHAT-HANH-GITHUB.md).
 
 ## Chạy bản phát triển
 

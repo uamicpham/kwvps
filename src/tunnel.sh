@@ -282,7 +282,8 @@ kw_tunnel_guide() {
 
 kw_tunnel_config_interactive() {
   local choice token
-  ((EUID == 0)) || { kw_log ERROR 'Cần root để cấu hình Tunnel.'; return 2; }
+  # Rendering the menu and reading the guide do not require root. Each
+  # mutating action checks privileges again at its own entry point.
   if ! kw_tunnel_installed; then
     printf 'cloudflared chưa cài.\n1. Cài cloudflared từ kho APT Cloudflare\n2. Hướng dẫn tạo Tunnel\n0. Quay lại\nChọn: '
     IFS= read -r choice || return 0

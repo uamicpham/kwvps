@@ -38,5 +38,5 @@ archive="$root/dist/kwvps-$version.tar.gz"
 }
 tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner \
   -czf "$archive" -C "$stage" kwvps
-sha256sum "$archive" > "$archive.sha256"
+(cd "$root/dist" && sha256sum "kwvps-$version.tar.gz" > "kwvps-$version.tar.gz.sha256")
 printf 'Đã tạo %s và checksum. Tạo GitHub release tag v%s, tải đúng gói này lên, rồi đối chiếu SHA-256.\n' "$archive" "$version"
