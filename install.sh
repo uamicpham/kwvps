@@ -115,14 +115,20 @@ install_apply() {
   printf 'Nhập INSTALL KWVPS để xác nhận: '
   [[ -r /dev/tty ]] || { printf 'Cần terminal tương tác.\n' >&2; return 2; }
   IFS= read -r phrase < /dev/tty || return 2
-  [[ $phrase == 'INSTALL KWVPS' ]] || { printf 'Đã hủy.\n'; return 0; }
-  apt-get update || return 1
-  candidate=$(apt-cache policy php8.3-fpm | awk '/^[[:space:]]*Candidate:/ { print $2; exit }') || return 1
+  [[ $phrase == 'INSTALL KWVPS' ]] || { printf 'Đã hủy cài đặt.\n'; return 130; }
+  apt-get update || { printf 'ERROR: apt-get update thất bại; chưa cài package.\n' >&2; return 1; }
+  candidate=$(kw_apt_candidate php8.3-fpm) || {
+    printf 'ERROR: Không đọc được bản PHP 8.3 ứng viên từ APT; chưa cài package.\n' >&2
+    return 1
+  }
   if ! kw_php_package_version_safe 8.3 "$candidate"; then
     printf 'DỪNG: PHP 8.3 ứng viên (%s) chưa có bản vá RCE được xác minh. Cần gói Ubuntu 24.04 .13 trở lên hoặc upstream 8.3.36 trở lên.\n' "$candidate" >&2
     return 2
   fi
-  apt-get install -y nginx php8.3-fpm mariadb-server fail2ban ufw cron nano curl || return 1
+  apt-get install -y nginx php8.3-fpm mariadb-server fail2ban ufw cron nano curl || {
+    printf 'ERROR: Cài package thất bại; cần kiểm tra APT trước khi chạy lại KwVPS.\n' >&2
+    return 1
+  }
   kw_php_security_ready 8.3 || return 2
   systemctl enable --now nginx php8.3-fpm mariadb fail2ban cron || return 1
   install -d -m 0755 /opt/kwvps /opt/kwvps/src /opt/kwvps/scripts /var/www/kwvps || return 1

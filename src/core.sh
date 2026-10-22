@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Shared primitives. No writes, network access, eval, or automatic sudo.
-readonly KW_VERSION='0.50.1'
+readonly KW_VERSION='0.50.2'
 KW_PREVIEW=0
 
 kw_log() {
@@ -28,6 +28,17 @@ kw_help() {
 }
 
 kw_has() { command -v "$1" >/dev/null 2>&1; }
+
+# Read all of apt-cache's output before selecting Candidate. Exiting an awk
+# pipeline early can send SIGPIPE to apt-cache under pipefail (exit 141).
+kw_apt_candidate() {
+  local package=${1:-} policy candidate
+  [[ $package =~ ^[a-z0-9.+-]+$ ]] || return 2
+  policy=$(LC_ALL=C apt-cache policy "$package") || return 1
+  candidate=$(awk '/^[[:space:]]*Candidate:/ && !found { print $2; found=1 }' <<< "$policy") || return 1
+  [[ -n $candidate && $candidate != '(none)' ]] || return 1
+  printf '%s\n' "$candidate"
+}
 
 kw_prompt_validated() {
   local prompt=$1 validator=$2 hint=$3 secret=$4 value

@@ -60,6 +60,29 @@ setup() {
   [[ "$output" == *'Kiến trúc này chưa được hỗ trợ; cần x86_64'* ]]
 }
 
+@test "APT candidate reader drains output without SIGPIPE under pipefail" {
+  printf '%s\n' '#!/usr/bin/env bash' \
+    'printf "php8.3-fpm:\n  Candidate: 8.3.6-0ubuntu0.24.04.13\n"' \
+    "awk 'BEGIN { for (i=0; i<20000; i++) print \"tail\" }'" \
+    > "$BATS_TEST_TMPDIR/bin/apt-cache"
+  chmod 0755 "$BATS_TEST_TMPDIR/bin/apt-cache"
+  PATH="$BATS_TEST_TMPDIR/bin:$PATH" run bash -c \
+    'set -Eeuo pipefail; source src/core.sh; kw_apt_candidate php8.3-fpm'
+  [ "$status" -eq 0 ]
+  [ "$output" = '8.3.6-0ubuntu0.24.04.13' ]
+}
+
+@test "APT candidate reader refuses a missing candidate" {
+  printf '%s\n' '#!/usr/bin/env bash' \
+    'printf "php8.3-fpm:\n  Candidate: (none)\n"' \
+    > "$BATS_TEST_TMPDIR/bin/apt-cache"
+  chmod 0755 "$BATS_TEST_TMPDIR/bin/apt-cache"
+  PATH="$BATS_TEST_TMPDIR/bin:$PATH" run bash -c \
+    'set -Eeuo pipefail; source src/core.sh; kw_apt_candidate php8.3-fpm'
+  [ "$status" -eq 1 ]
+  [ -z "$output" ]
+}
+
 @test "bootstrap validates the release and performs preflight without installing" {
   PATH="$BATS_TEST_TMPDIR/bin:$PATH" run bash scripts/bootstrap-release.sh --check
   [ "$status" -eq 0 ]

@@ -110,7 +110,7 @@ kw_pma_install_plan() {
   local simulation candidate
   kw_os_supported '' && kw_php_security_ready 8.3 || return 2
   kw_has apt-get && kw_has apt-cache && kw_has debconf-set-selections || return 2
-  candidate=$(apt-cache policy php8.3-fpm | awk '/^[[:space:]]*Candidate:/ {print $2; exit}') || return 2
+  candidate=$(kw_apt_candidate php8.3-fpm) || return 2
   kw_php_package_version_safe 8.3 "$candidate" || {
     kw_log ERROR "PHP 8.3 ứng viên $candidate chưa có bản vá được xác minh."; return 2;
   }

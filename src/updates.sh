@@ -14,7 +14,7 @@ kw_update_php_candidates_safe() {
     package="php${version}-fpm"
     dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -Fqx 'install ok installed' || continue
     installed=$(dpkg-query -W -f='${Version}' "$package" 2>/dev/null) || return 2
-    candidate=$(LC_ALL=C apt-cache policy "$package" | awk '/^[[:space:]]*Candidate:/ {print $2; exit}') || return 2
+    candidate=$(kw_apt_candidate "$package") || return 2
     dpkg --compare-versions "$candidate" gt "$installed" || continue
     if ! kw_php_package_version_safe "$version" "$candidate"; then
       kw_log ERROR "$package có candidate $candidate chưa được xác minh an toàn; dừng cập nhật."
