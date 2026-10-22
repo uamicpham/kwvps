@@ -744,10 +744,13 @@ kw_site_clone_interactive() {
   printf 'Quản lý Sites / Nhân bản site / Chọn site nguồn để nhân bản\n'
   kw_site_prompt_domain || return 0
   source=$KW_SITE_CHOICE
+  # shellcheck disable=SC2031 # kw_site_lookup sets site metadata in this current shell.
   kw_site_lookup "$source" || return 2
+  # shellcheck disable=SC2031 # Value was set by kw_site_lookup above, not a subshell.
   if [[ $KW_SITE_PHP == 7.4 ]]; then
     printf 'CẢNH BÁO: site nguồn dùng PHP 7.4 đã hết hỗ trợ; site clone cũng sẽ dùng phiên bản EOL này.\n'
     kw_prompt_yes_no_token 'Tôi hiểu rủi ro EOL và vẫn muốn nhân bản site bằng PHP 7.4?' 'CLONE-EOL-PHP:7.4' || return 0
+    # shellcheck disable=SC2034 # Read by the nested clone/site preflight.
     KW_PHP_EOL_SITE_ACK=1
   fi
   # shellcheck disable=SC2016 # Backticks are literal menu typography.
