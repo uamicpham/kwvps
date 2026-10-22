@@ -6,7 +6,7 @@ Sau khi cài, lệnh mở menu là `kwvps`.
 
 ## Trạng thái
 
-KwVPS 0.50.0 đã có [GitHub Release](https://github.com/uamicpham/kwvps/releases/tag/v0.50.0). Bản 0.50.1 đang bổ sung kiểm tra kiến trúc và ghim release cho lệnh cài một dòng. VPS thử nghiệm vẫn chạy `0.49.2-dev`, không bị cài đè. PHP 8.3 (Ubuntu), 8.4 và 8.5 (PPA Ubuntu Ondřej) đã chạy trên lab. Giới hạn từng chức năng xem [bảng trạng thái](docs/TRANG-THAI-CHUC-NANG.md) và [ghi chú phát hành](docs/RELEASE-NOTES-0.50.1.md).
+KwVPS [0.50.1 đã phát hành](https://github.com/uamicpham/kwvps/releases/tag/v0.50.1). VPS thử nghiệm vẫn chạy `0.49.2-dev`, không bị cài đè. PHP 8.3 (Ubuntu), 8.4 và 8.5 (PPA Ubuntu Ondřej) đã chạy trên lab. Giới hạn từng chức năng xem [bảng trạng thái](docs/TRANG-THAI-CHUC-NANG.md) và [ghi chú phát hành](docs/RELEASE-NOTES-0.50.1.md).
 
 Quản lý Sites có tạo, đổi tên miền HTTP nguyên bản, clone source/code, xóa với hai lựa chọn giữ vùng phục hồi/xóa sạch và phân lại quyền. Menu Backup có phục hồi hoặc xóa sạch gói site đã giữ. Tunnel/route thật đã được thử trên VPS lab; đổi tên site không tự cập nhật DNS/route Cloudflare hoặc URL ứng dụng. Các thao tác không xóa dùng xác nhận `y/N`; xóa yêu cầu gõ lại đối tượng. **Không cài đè lên VPS LarVPS, web stack có sẵn hoặc máy chứa website/dữ liệu.**
 
@@ -15,10 +15,10 @@ Quản lý Sites có tạo, đổi tên miền HTTP nguyên bản, clone source/
 Chỉ chạy trên **Ubuntu Server 24.04 LTS sạch, x86_64, systemd**, có `curl`, `python3`, `tar`, `sha256sum` và quyền `sudo`/root. Không chạy trên VPS đã có website, LarVPS hay web stack khác. Bộ cài yêu cầu nhập `INSTALL KWVPS` trước khi cài package.
 
 ```bash
-set -o pipefail; curl -fsSL https://raw.githubusercontent.com/uamicpham/kwvps/v0.50.1/scripts/bootstrap-release.sh | sudo bash -s -- --apply
+set -o pipefail; curl -fsSL https://raw.githubusercontent.com/uamicpham/kwvps/main/scripts/bootstrap-release.sh | sudo bash -s -- --apply
 ```
 
-Lệnh này lấy **release mới nhất** từ GitHub; bản bootstrap ban đầu vẫn được tải từ tag `v0.50.1`. `pipefail` giúp lệnh báo lỗi nếu tải bootstrap thất bại. Bootstrap kiểm tra SHA-256 của gói release trước khi cài, nhưng cách `curl | bash` không kiểm tra riêng checksum của chính bootstrap. Nếu muốn ghim cả phiên bản cài đặt và kiểm tra bootstrap trước khi chạy, dùng lệnh bên dưới.
+Lệnh này không cần đổi khi có release mới: nó tải bootstrap hiện tại từ `main`, rồi chọn **release mới nhất** trên GitHub. `pipefail` giúp lệnh báo lỗi nếu tải bootstrap thất bại. Bootstrap kiểm tra SHA-256 của gói release trước khi cài. Tuy nhiên, nhánh `main` có thể thay đổi và cách `curl | bash` không kiểm tra riêng checksum của bootstrap; chỉ chạy khi bạn tin tưởng repository. Nếu muốn ghim cả phiên bản và kiểm tra bootstrap trước khi chạy, dùng lệnh bên dưới.
 
 ```bash
 kwvps_tmp=''; kwvps_tmp=$(mktemp) && curl -fsSL --proto '=https' --tlsv1.2 'https://raw.githubusercontent.com/uamicpham/kwvps/v0.50.1/scripts/bootstrap-release.sh' -o "$kwvps_tmp" && printf '%s  %s\n' '8873fd8d6ae9c6b9207b8b2ebe2401b6b42d3bc3bf6d59f1548564f817e359f1' "$kwvps_tmp" | sha256sum -c - && sudo bash "$kwvps_tmp" --apply --release=v0.50.1; kwvps_rc=$?; if [ -n "$kwvps_tmp" ]; then rm -f -- "$kwvps_tmp"; fi; (exit "$kwvps_rc")

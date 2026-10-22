@@ -2,7 +2,7 @@
 
 ## Trạng thái
 
-KwVPS 0.50.0 đã phát hành tại [uamicpham/kwvps](https://github.com/uamicpham/kwvps). Bản 0.50.1 chốt lệnh cài một dòng ghim tag và SHA-256 bootstrap. Bản cài mới chỉ hỗ trợ VPS Ubuntu Server 24.04 sạch, x86_64 và systemd; không cài đè LarVPS hay web stack khác.
+KwVPS 0.50.1 đã phát hành tại [uamicpham/kwvps](https://github.com/uamicpham/kwvps). README có lệnh cài ngắn tự lấy release mới nhất và lệnh ghim tag/checksum để kiểm soát chặt hơn. Bản cài mới chỉ hỗ trợ VPS Ubuntu Server 24.04 sạch, x86_64 và systemd; không cài đè LarVPS hay web stack khác.
 
 ## Chuẩn bị GitHub
 
@@ -22,11 +22,11 @@ Script đóng gói theo danh sách file cho phép vào `dist/kwvps-x.y.z.tar.gz`
 
 ## Lệnh cài một dòng
 
-Lệnh cài ngắn và lệnh ghim phiên bản có xác minh SHA-256 bootstrap nằm trong [README](../README.md#cài-bằng-một-dòng-trên-vps-mới). Lệnh ngắn dùng bootstrap từ tag `v0.50.1` và chọn release mới nhất; bootstrap kiểm tra SHA-256 của gói trước khi cài, nhưng lệnh ngắn không xác minh checksum của chính bootstrap. Lệnh dài kiểm tra checksum bootstrap trước khi chạy và ghim release `v0.50.1`. Không tải script trực tiếp từ nhánh `main` đổi liên tục. VPS cần `curl`, `python3`, `tar`, `sha256sum`, `sudo` hoặc quyền root và Ubuntu 24.04 sạch. Bộ cài tự kiểm tra xung đột, bản vá PHP 8.3, hỏi `INSTALL KWVPS` và không tự bật UFW/SSL.
+Lệnh cài ngắn và lệnh ghim phiên bản có xác minh SHA-256 bootstrap nằm trong [README](../README.md#cài-bằng-một-dòng-trên-vps-mới). Lệnh ngắn tải bootstrap từ nhánh `main` và chọn release mới nhất; nó không cần sửa khi phát hành phiên bản mới, nhưng không xác minh checksum của chính bootstrap và nhánh `main` có thể thay đổi. Bootstrap xác minh SHA-256 của gói release trước khi cài. Lệnh dài kiểm tra checksum bootstrap trước khi chạy và ghim release `v0.50.1`. VPS cần `curl`, `python3`, `tar`, `sha256sum`, `sudo` hoặc quyền root và Ubuntu 24.04 sạch. Bộ cài tự kiểm tra xung đột, bản vá PHP 8.3, hỏi `INSTALL KWVPS` và không tự bật UFW/SSL.
 
 Sau khi cài, chạy `kwvps --doctor` và `kwvps`. Gói release mang `release-repo` để bộ cài lưu nguồn GitHub công khai trong `/etc/kwvps/github-repo`; menu Update dùng GitHub Release API, chỉ chấp nhận bản mới hơn có SHA-256 hợp lệ do API trả về. Nếu repo private, thiết kế tải không dùng token hiện tại sẽ không hoạt động; cần thảo luận cơ chế phát hành riêng, không dán token vào lệnh cài.
 
-`scripts/bootstrap-release.sh` tải release public, xác minh SHA-256 và kiểm tra archive trước khi chạy installer. Lệnh ngắn cố định tag của bootstrap nhưng không kiểm tra checksum bootstrap; lệnh dài kiểm tra checksum. Release workflow chỉ xuất bản nếu syntax, smoke, ShellCheck, Bats, Python và kiểm tra checksum gói đều đạt.
+`scripts/bootstrap-release.sh` tải release public, xác minh SHA-256 và kiểm tra archive trước khi chạy installer. Lệnh ngắn theo nhánh `main` nhưng không kiểm tra checksum bootstrap; lệnh dài ghim tag và kiểm tra checksum. Release workflow chỉ xuất bản nếu syntax, smoke, ShellCheck, Bats, Python và kiểm tra checksum gói đều đạt.
 
 ## Điều kiện phát hành
 
