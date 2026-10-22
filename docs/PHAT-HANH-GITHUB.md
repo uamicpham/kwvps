@@ -2,7 +2,7 @@
 
 ## Trạng thái
 
-KwVPS 0.50.3 là bản kế tiếp dự kiến phát hành tại [uamicpham/kwvps](https://github.com/uamicpham/kwvps). README có lệnh cài ngắn tự lấy release mới nhất và lệnh ghim tag/checksum để kiểm soát chặt hơn. Bản cài mới chỉ hỗ trợ VPS Ubuntu Server 24.04 sạch, x86_64 và systemd; không cài đè LarVPS hay web stack khác.
+KwVPS [0.50.3 đã phát hành](https://github.com/uamicpham/kwvps/releases/tag/v0.50.3) tại `uamicpham/kwvps`. README có lệnh cài ngắn tự lấy release mới nhất và lệnh ghim tag/checksum để kiểm soát chặt hơn. VPS đã cài có thể chọn **Quản lý Update → Kiểm tra / cập nhật KwVPS**; gói được xác minh bằng SHA-256 từ GitHub API trước khi áp dụng. Bản cài mới chỉ hỗ trợ VPS Ubuntu Server 24.04 sạch, x86_64 và systemd; không cài đè LarVPS hay web stack khác.
 
 ## Chuẩn bị GitHub
 
