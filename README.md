@@ -6,7 +6,7 @@ Sau khi cài, lệnh mở menu là `kwvps`.
 
 ## Trạng thái
 
-KwVPS [0.50.1 đã phát hành](https://github.com/uamicpham/kwvps/releases/tag/v0.50.1). VPS thử nghiệm vẫn chạy `0.49.2-dev`, không bị cài đè. PHP 8.3 (Ubuntu), 8.4 và 8.5 (PPA Ubuntu Ondřej) đã chạy trên lab. Giới hạn từng chức năng xem [bảng trạng thái](docs/TRANG-THAI-CHUC-NANG.md) và [ghi chú phát hành](docs/RELEASE-NOTES-0.50.1.md).
+KwVPS [0.50.2 đã phát hành](https://github.com/uamicpham/kwvps/releases/tag/v0.50.2), sửa lỗi khiến bộ cài thoát sau cập nhật APT khi đọc Candidate PHP. VPS thử nghiệm trước đó vẫn chạy `0.49.2-dev`, không bị cài đè. PHP 8.3 (Ubuntu), 8.4 và 8.5 (PPA Ubuntu Ondřej) đã chạy trên lab. Giới hạn từng chức năng xem [bảng trạng thái](docs/TRANG-THAI-CHUC-NANG.md) và [ghi chú phát hành](docs/RELEASE-NOTES-0.50.2.md).
 
 Quản lý Sites có tạo, đổi tên miền HTTP nguyên bản, clone source/code, xóa với hai lựa chọn giữ vùng phục hồi/xóa sạch và phân lại quyền. Menu Backup có phục hồi hoặc xóa sạch gói site đã giữ. Tunnel/route thật đã được thử trên VPS lab; đổi tên site không tự cập nhật DNS/route Cloudflare hoặc URL ứng dụng. Các thao tác không xóa dùng xác nhận `y/N`; xóa yêu cầu gõ lại đối tượng. **Không cài đè lên VPS LarVPS, web stack có sẵn hoặc máy chứa website/dữ liệu.**
 
