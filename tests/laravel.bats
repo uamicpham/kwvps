@@ -62,10 +62,27 @@ setup() {
 }
 
 @test "Laravel layout creates only private source and shared storage" {
-  runuser() { shift 3; "$@"; }
+  runuser() {
+    if [[ ${1:-} == -u && ${3:-} == -g && ${4:-} == www-data && ${5:-} == -- ]]; then
+      shift 5
+      "$@"
+    elif [[ ${1:-} == -u && ${3:-} == -- ]]; then
+      shift 3
+      # Reproduce Linux dropping setgid when the site user is not in www-data.
+      if [[ ${1:-} == chmod && ${2:-} == 2750 ]]; then
+        command chmod 0750 -- "$4"
+      else
+        "$@"
+      fi
+    else
+      return 2
+    fi
+  }
   chown() { :; }
   stat() {
-    if [[ $1 == -c && $2 == '%U:%a' ]]; then
+    if [[ $1 == -c && $2 == '%U:%G' ]]; then
+      printf 'kwexamplecom:www-data\n'
+    elif [[ $1 == -c && $2 == '%U:%a' ]]; then
       printf 'kwexamplecom:%s\n' "$(command stat -c %a -- "$4")"
     elif [[ $1 == -c && $2 == %G ]]; then
       printf 'www-data\n'

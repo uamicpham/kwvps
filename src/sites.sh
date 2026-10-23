@@ -908,9 +908,12 @@ kw_site_laravel_create_layout() (
     [[ -d $path && ! -L $path ]] || return 2
     chown -h -- "$owner:www-data" "$path" || return 1
   done
-  # New upload subdirectories inherit www-data. Apply chmod as the site user:
-  # this path is writable by that user, so root must not follow a raced link.
-  runuser -u "$owner" -- chmod 2750 -- "$deploy/shared/storage/app/public" || return 1
+  # chmod by an unprivileged user silently clears setgid if its effective group
+  # does not match the directory's group. Run only this chmod with www-data as
+  # the primary group, keeping the site UID and avoiding root following a raced link.
+  [[ -d $deploy/shared/storage/app/public && ! -L $deploy/shared/storage/app/public &&
+     $(stat -c '%U:%G' -- "$deploy/shared/storage/app/public") == "$owner:www-data" ]] || return 2
+  runuser -u "$owner" -g www-data -- chmod 2750 -- "$deploy/shared/storage/app/public" || return 1
   for path in "${created[@]}"; do
     expected_mode=750
     [[ $path != "$deploy/shared/storage/app/public" ]] || expected_mode=2750
