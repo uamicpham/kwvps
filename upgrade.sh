@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Upgrade an existing KwVPS test installation without touching site data or services.
+# Upgrade KwVPS code without touching site data or restarting running services.
 set -Eeuo pipefail
 if ((BASH_VERSINFO[0] < 5)); then
   printf 'Cần Bash 5 trở lên.\n' >&2
@@ -13,6 +13,8 @@ source "$KW_UPGRADE_ROOT/src/core.sh"
 source "$KW_UPGRADE_ROOT/src/system.sh"
 # shellcheck source=src/updates.sh
 source "$KW_UPGRADE_ROOT/src/updates.sh"
+# shellcheck source=src/ssl.sh
+source "$KW_UPGRADE_ROOT/src/ssl.sh"
 
 upgrade_usage() {
   printf '%s\n' \
@@ -120,6 +122,12 @@ upgrade_apply_locked() {
   install -m 0644 -- "$KW_UPGRADE_ROOT/scripts/kwvps-cf-limit-ban.service" /etc/systemd/system/kwvps-cf-limit-ban.service || return 1
   install -m 0644 -- "$KW_UPGRADE_ROOT/scripts/kwvps-cf-limit-ban.timer" /etc/systemd/system/kwvps-cf-limit-ban.timer || return 1
   systemctl daemon-reload || return 1
+  # The renewal hook is copied outside /opt/kwvps, so a code upgrade alone
+  # would leave existing certificates using the old reload-only hook.
+  if [[ -e /etc/letsencrypt/renewal-hooks/deploy/kwvps-nginx ||
+        -L /etc/letsencrypt/renewal-hooks/deploy/kwvps-nginx ]]; then
+    kw_ssl_install_renew_hook || kw_log WARN 'Chưa nâng cấp được renewal hook Nginx; kiểm tra thủ công trước lần gia hạn SSL tiếp theo.'
+  fi
   printf 'Đã nâng cấp: '
   /opt/kwvps/kwvps --version
   printf 'Bản mã trước được giữ tại %s\n' "$previous"

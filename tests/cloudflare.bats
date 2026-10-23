@@ -7,6 +7,11 @@ setup() {
   source src/cloudflare.sh
 }
 
+@test "Cloudflare API token prompt uses visible input" {
+  run grep -F "kw_prompt_validated 'Dán API token của site (hiển thị khi nhập; Enter để hủy): ' kw_cf_token_valid 'Token cần 20–256 ký tự chữ/số/._-' plain" src/cloudflare.sh
+  [ "$status" -eq 0 ]
+}
+
 @test "Cloudflare Real IP requires exact confirmation before network access" {
   run kw_cf_realip_apply WRONG
   [ "$status" -eq 2 ]

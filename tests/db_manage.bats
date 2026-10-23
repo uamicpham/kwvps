@@ -71,6 +71,29 @@ setup() {
   [[ "$output" == *'CREATED:demo_db:demo_user'* ]]
 }
 
+@test "DB create and change password prompts show typed characters" {
+  kw_site_prompt_domain() { KW_SITE_CHOICE=example.com; }
+  kw_db_choose_managed() { KW_DB_MANAGED_CHOICE=demo_db; }
+  kw_db_select_meta() { KW_DB_SELECTED_USER=demo_user; }
+  kw_prompt_validated() {
+    if [[ $1 == Mật\ khẩu* ]]; then
+      [[ $1 == *'hiển thị khi nhập'* && $4 == plain ]] || return 2
+      KW_PROMPT_VALUE=ValidPass_123!
+    elif [[ $1 == Tên\ database* ]]; then KW_PROMPT_VALUE=demo_db
+    elif [[ $1 == Tên\ user* ]]; then KW_PROMPT_VALUE=demo_user
+    else return 2; fi
+  }
+  kw_prompt_yes_no_token() { KW_PROMPT_VALUE=$2; }
+  kw_db_custom_create() { printf 'CREATED\n'; }
+  kw_db_password_change() { printf 'CHANGED\n'; }
+  run kw_db_custom_create_interactive
+  [ "$status" -eq 0 ]
+  [[ "$output" == *CREATED* && "$output" != *ValidPass_123!* ]]
+  run kw_db_password_change_interactive
+  [ "$status" -eq 0 ]
+  [[ "$output" == *CHANGED* && "$output" != *ValidPass_123!* ]]
+}
+
 @test "destructive DB APIs require confirmation before system access" {
   run kw_db_drop_named kenhgamez5 NO
   [ "$status" -eq 2 ]
@@ -80,4 +103,22 @@ setup() {
   [ "$status" -eq 2 ]
   run kw_db_custom_create example.com kenhgamez5 kenhgamez_user Safe-pass_123! wrong
   [ "$status" -eq 2 ]
+}
+
+@test "named DB import warns about existing tables and never auto-exports" {
+  kw_db_choose_upload() { KW_DB_UPLOAD_CHOICE=existing.sql.gz; }
+  kw_db_choose_managed() { KW_DB_MANAGED_CHOICE=demo_db; }
+  mariadb() { printf '3\n'; }
+  kw_prompt_yes_no_token() { KW_PROMPT_VALUE=$2; }
+  kw_db_import_uploaded() { printf 'IMPORTED:%s:%s\n' "$1" "$2"; }
+  run kw_db_import_uploaded_interactive <<< '1'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'đã có 3 bảng'* ]]
+  [[ "$output" == *'Import không tự export hiện trạng'* ]]
+  [[ "$output" == *'IMPORTED:existing.sql.gz:demo_db'* ]]
+  local function_body
+  function_body=$(declare -f kw_db_import_uploaded_locked)
+  [[ "$function_body" != *'kw_db_export_named_locked'* ]]
+  function_body=$(declare -f kw_db_export_named_locked)
+  [[ "$function_body" != *'sha256sum'* ]]
 }

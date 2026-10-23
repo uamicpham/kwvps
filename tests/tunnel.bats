@@ -7,6 +7,15 @@ setup() {
   source src/tunnel.sh
 }
 
+@test "Tunnel token prompt uses visible input" {
+  run grep -F 'Dán Tunnel token (hiển thị khi nhập; 0 hoặc Enter để quay lại): ' src/tunnel.sh
+  [ "$status" -eq 0 ]
+  run grep -F 'IFS= read -r token || return 0' src/tunnel.sh
+  [ "$status" -eq 0 ]
+  run grep -F 'read -r -s token' src/tunnel.sh
+  [ "$status" -eq 1 ]
+}
+
 @test "Tunnel package install refuses missing confirmation before network access" {
   run kw_tunnel_install WRONG
   [ "$status" -eq 2 ]

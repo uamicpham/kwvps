@@ -36,3 +36,19 @@ setup() {
   run kw_pma_admin_set_password ValidPassword123 create wrong
   [ "$status" -eq 2 ]
 }
+
+@test "phpMyAdmin admin DB password prompt shows typed characters" {
+  kw_pma_ready() { return 0; }
+  kw_db_ready() { return 0; }
+  kw_pma_admin_exists() { return 1; }
+  kw_prompt_validated() {
+    [[ $1 == *'hiển thị khi nhập'* && $4 == plain ]] || return 2
+    KW_PROMPT_VALUE=ValidPassword123
+  }
+  kw_prompt_yes_no_token() { KW_PROMPT_VALUE=$2; }
+  kw_pma_admin_set_password() { printf 'CREATED\n'; }
+  kw_pma_tunnel_guide() { :; }
+  run kw_pma_admin_interactive <<< '1'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *CREATED* && "$output" != *ValidPassword123* ]]
+}

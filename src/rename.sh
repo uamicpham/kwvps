@@ -177,11 +177,18 @@ kw_site_rename_rollback() {
     [[ ! -e $KW_RENAME_STAGE/$name && ! -L $KW_RENAME_STAGE/$name ]] ||
       mv -T -- "$KW_RENAME_STAGE/$name" "$file" || kw_log ERROR "Cần trả file: $file"
   done
-  if ! { "php-fpm${KW_RENAME_PHP}" -t >/dev/null 2>&1 && systemctl reload "php${KW_RENAME_PHP}-fpm"; }; then
-    kw_log ERROR 'Cần kiểm tra PHP-FPM sau rollback đổi tên.'
+  if ((KW_RENAME_FPM_CHANGED)); then
+    if ! "php-fpm${KW_RENAME_PHP}" -t >/dev/null 2>&1 || \
+       ! systemctl restart "php${KW_RENAME_PHP}-fpm" || \
+       ! systemctl is-active --quiet "php${KW_RENAME_PHP}-fpm"; then
+      kw_log ERROR 'Cần kiểm tra PHP-FPM sau rollback đổi tên.'
+    fi
   fi
-  if ! { nginx -t >/dev/null 2>&1 && systemctl reload nginx; }; then
-    kw_log ERROR 'Cần kiểm tra Nginx sau rollback đổi tên.'
+  if ((KW_RENAME_NGINX_CHANGED)); then
+    if ! nginx -t >/dev/null 2>&1 || ! systemctl restart nginx || \
+       ! systemctl is-active --quiet nginx; then
+      kw_log ERROR 'Cần kiểm tra Nginx sau rollback đổi tên.'
+    fi
   fi
   kw_log WARN "Giữ bản cấu hình cũ tại $KW_RENAME_STAGE để kiểm tra."
 }
@@ -190,6 +197,8 @@ kw_site_rename_locked() (
   local old=$1 new=$2 old_id new_id file name temp
   # shellcheck disable=SC2034 # Rollback trap reads these variables.
   local KW_RENAME_DONE=0 KW_RENAME_USER=0 KW_RENAME_GROUP=0 KW_RENAME_HOME=0
+  # shellcheck disable=SC2034 # Rollback trap reads these mutation markers.
+  local KW_RENAME_NGINX_CHANGED=0 KW_RENAME_FPM_CHANGED=0
   local KW_RENAME_STAGE='' KW_RENAME_OLD_OWNER='' KW_RENAME_NEW_OWNER=''
   local KW_RENAME_OLD_ROOT='' KW_RENAME_NEW_ROOT='' KW_RENAME_OLD_POOL='' KW_RENAME_NEW_POOL=''
   local KW_RENAME_OLD_VHOST='' KW_RENAME_NEW_VHOST='' KW_RENAME_OLD_META='' KW_RENAME_NEW_META=''
@@ -235,14 +244,20 @@ kw_site_rename_locked() (
     install -m 0644 -o root -g root -- "$kw_cf_antiddos_conf" "$KW_RENAME_STAGE/antiddos.conf" || return 1
   fi
   printf 'Đang đổi site; bản cấu hình cũ sẽ giữ tại %s\n' "$KW_RENAME_STAGE"
+  # shellcheck disable=SC2034 # Rollback must restore service state even after a partial move.
+  KW_RENAME_NGINX_CHANGED=1
   mv -T -- "$KW_RENAME_OLD_LINK" "$KW_RENAME_STAGE/link" || return 1
   mv -T -- "$KW_RENAME_OLD_VHOST" "$KW_RENAME_STAGE/vhost" || return 1
+  # shellcheck disable=SC2034 # Rollback must restore service state even after a partial move.
+  KW_RENAME_FPM_CHANGED=1
   mv -T -- "$KW_RENAME_OLD_POOL" "$KW_RENAME_STAGE/pool" || return 1
   mv -T -- "$KW_RENAME_OLD_META" "$KW_RENAME_STAGE/meta" || return 1
   nginx -t >/dev/null || return 1
-  systemctl reload nginx || return 1
   "php-fpm${KW_RENAME_PHP}" -t >/dev/null || return 1
-  systemctl reload "php${KW_RENAME_PHP}-fpm" || return 1
+  systemctl restart "php${KW_RENAME_PHP}-fpm" || return 1
+  systemctl is-active --quiet "php${KW_RENAME_PHP}-fpm" || return 1
+  systemctl restart nginx || return 1
+  systemctl is-active --quiet nginx || return 1
   usermod --login "$KW_RENAME_NEW_OWNER" -- "$KW_RENAME_OLD_OWNER" || return 1
   # shellcheck disable=SC2034 # Read by EXIT rollback trap.
   KW_RENAME_USER=1
@@ -281,8 +296,10 @@ kw_site_rename_locked() (
   fi
   "php-fpm${KW_RENAME_PHP}" -t >/dev/null || return 1
   nginx -t >/dev/null || return 1
-  systemctl reload "php${KW_RENAME_PHP}-fpm" || return 1
-  systemctl reload nginx || return 1
+  systemctl restart "php${KW_RENAME_PHP}-fpm" || return 1
+  systemctl is-active --quiet "php${KW_RENAME_PHP}-fpm" || return 1
+  systemctl restart nginx || return 1
+  systemctl is-active --quiet nginx || return 1
   curl --fail --silent --show-error --noproxy '*' --max-time 8 -H "Host: $new" http://127.0.0.1/ >/dev/null || return 1
   kw_site_lookup "$new" || return 1
   [[ $KW_SITE_OWNER == "$KW_RENAME_NEW_OWNER" ]] || return 1

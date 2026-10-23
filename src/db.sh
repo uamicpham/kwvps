@@ -194,46 +194,44 @@ kw_db_export_plan() {
   kw_db_ready || return 2
   kw_db_meta_lookup "$domain" || return 2
   printf 'Kế hoạch export MariaDB (chưa thay đổi hệ thống):\n'
-  printf '  Domain: %s\n  Database: %s\n  Nơi lưu: %s/db-%s-<thời gian>-<ngẫu nhiên>.sql.gz\n' \
-    "$domain" "$KW_DB_NAME" "$KW_BACKUP_ROOT" "${KW_SITE_OWNER#kw}"
-  printf '  Dump root-only; có checksum SHA-256, không chứa mật khẩu kết nối.\n'
+  printf '  Domain: %s\n  Database: %s\n  Nơi lưu: %s/db-%s-YYYYMMDD-HHMMSS.sql.gz\n' \
+    "$domain" "$KW_DB_NAME" "$KW_BACKUP_ROOT" "$KW_DB_NAME"
+  printf '  Dump root-only, không chứa mật khẩu kết nối; không tạo file checksum riêng.\n'
 }
 
 kw_db_export_locked() (
-  local domain=$1 id timestamp tmp='' check_tmp='' final='' digest random
+  local domain=$1 id timestamp tmp='' final='' suffix=1
   kw_db_ready || return 2
   kw_db_meta_lookup "$domain" || return 2
   kw_db_exists "${KW_SITE_OWNER#kw}" || return 2
-  kw_has mariadb-dump && kw_has gzip && kw_has sha256sum || return 2
+  kw_has mariadb-dump && kw_has gzip || return 2
   kw_backup_dir_safe /var/backups 0022 || return 2
   if [[ ! -e $KW_BACKUP_ROOT && ! -L $KW_BACKUP_ROOT ]]; then
     install -d -m 0700 -o root -g root -- "$KW_BACKUP_ROOT" || return 1
   fi
   kw_backup_dir_safe "$KW_BACKUP_ROOT" 0077 || return 2
   id=${KW_SITE_OWNER#kw}
-  timestamp=$(date -u +%Y%m%dT%H%M%SZ) || return 1
+  timestamp=$(date -u +%Y%m%d-%H%M%S) || return 1
   tmp=$(mktemp "$KW_BACKUP_ROOT/.db-${id}.XXXXXXXX") || return 1
-  trap '[[ -z $tmp ]] || rm -f -- "$tmp"; [[ -z $check_tmp ]] || rm -f -- "$check_tmp"' EXIT
+  trap '[[ -z $tmp ]] || rm -f -- "$tmp"' EXIT
   chmod 0600 -- "$tmp" || return 1
   if ! mariadb-dump --protocol=socket -uroot --single-transaction --quick \
       --routines --events --triggers "$KW_DB_NAME" | gzip -c > "$tmp"; then
     kw_log ERROR 'Export MariaDB thất bại; không công bố gói.'; return 1
   fi
   [[ -s $tmp ]] && gzip -t -- "$tmp" || return 1
-  digest=$(sha256sum -- "$tmp") || return 1
-  digest=${digest%% *}
-  [[ $digest =~ ^[0-9a-f]{64}$ ]] || return 1
-  random=${tmp##*.}
-  final="$KW_BACKUP_ROOT/db-${id}-${timestamp}-${random}.sql.gz"
-  [[ ! -e $final && ! -L $final ]] || return 1
-  mv -- "$tmp" "$final" || return 1
+  final="$KW_BACKUP_ROOT/db-${KW_DB_NAME}-${timestamp}.sql.gz"
+  while [[ -e $final || -L $final || -e $final.sha256 || -L $final.sha256 ]]; do
+    suffix=$((suffix + 1))
+    ((suffix <= 9999)) || return 1
+    final="$KW_BACKUP_ROOT/db-${KW_DB_NAME}-${timestamp}-${suffix}.sql.gz"
+  done
+  # The root-only backup directory and DB lock prevent normal concurrent writes.
+  # ln still refuses a destination created between the check and publication.
+  ln -- "$tmp" "$final" || return 1
+  rm -f -- "$tmp" || return 1
   tmp=''
-  check_tmp=$(mktemp "$KW_BACKUP_ROOT/.checksum-db-${id}.XXXXXXXX") || return 1
-  printf '%s  %s\n' "$digest" "${final##*/}" > "$check_tmp" || return 1
-  chmod 0600 -- "$check_tmp" || return 1
-  mv -- "$check_tmp" "$final.sha256" || return 1
-  check_tmp=''
-  printf 'Đã export %s: %s\nSHA-256: %s\n' "$KW_DB_NAME" "$final" "$digest"
+  printf 'Đã export %s: %s\n' "$KW_DB_NAME" "$final"
   printf 'Chưa thử import; file trên cùng VPS không thay thế backup ngoài máy.\n'
 )
 
@@ -258,7 +256,15 @@ kw_db_export_interactive() {
 }
 
 kw_db_backup_name_valid() {
-  [[ ${1:-} =~ ^db-[a-z0-9]{1,29}-[0-9]{8}T[0-9]{6}Z-[[:alnum:]]{8}\.sql\.gz$ ]]
+  local name=${1:-}
+  [[ $name =~ ^db-kwdb_[a-z0-9]{1,29}-[0-9]{8}-[0-9]{6}(-[2-9]|-[1-9][0-9]+)?\.sql\.gz$ ]] ||
+    [[ $name =~ ^db-[a-z0-9]{1,29}-[0-9]{8}T[0-9]{6}Z-[[:alnum:]]{8}\.sql\.gz$ ]]
+}
+
+kw_db_backup_for_site() {
+  local id=$1 name=$2
+  kw_site_id_valid "$id" && kw_db_backup_name_valid "$name" || return 1
+  [[ $name == "db-kwdb_${id}-"* || $name == "db-${id}-"* ]]
 }
 
 kw_db_backup_list() {
@@ -280,10 +286,10 @@ kw_db_choose_backup() {
   ((EUID == 0)) || return 2
   kw_backup_dir_safe "$KW_BACKUP_ROOT" 0077 || return 2
   printf 'Chọn backup database:\n'
-  for file in "$KW_BACKUP_ROOT"/"db-${id}-"*.sql.gz; do
+  for file in "$KW_BACKUP_ROOT"/"db-kwdb_${id}-"*.sql.gz "$KW_BACKUP_ROOT"/"db-${id}-"*.sql.gz; do
     [[ -f $file && ! -L $file ]] || continue
     name=${file##*/}
-    kw_db_backup_name_valid "$name" || continue
+    kw_db_backup_for_site "$id" "$name" || continue
     names+=("$name")
     count=$((count + 1))
     printf '%2d. %s\n' "$count" "$name"
@@ -296,19 +302,27 @@ kw_db_choose_backup() {
 }
 
 kw_db_backup_verify() {
-  local name=$1 path line expected stored actual
+  local name=$1 path line expected stored actual had_checksum=0
   ((EUID == 0)) || return 2
   kw_db_backup_name_valid "$name" || return 2
   kw_backup_dir_safe "$KW_BACKUP_ROOT" 0077 || return 2
   path="$KW_BACKUP_ROOT/$name"
-  [[ -f $path && ! -L $path && -f $path.sha256 && ! -L $path.sha256 ]] || return 2
-  IFS= read -r line < "$path.sha256" || return 2
-  expected=${line%%  *}; stored=${line#*  }
-  [[ $expected =~ ^[0-9a-f]{64}$ && $line == "$expected  $name" && $stored == "$name" ]] || return 2
-  actual=$(sha256sum -- "$path") || return 2
-  [[ ${actual%% *} == "$expected" ]] || return 2
+  [[ -f $path && ! -L $path ]] || return 2
+  if [[ -e $path.sha256 || -L $path.sha256 ]]; then
+    [[ -f $path.sha256 && ! -L $path.sha256 ]] || return 2
+    IFS= read -r line < "$path.sha256" || return 2
+    expected=${line%%  *}; stored=${line#*  }
+    [[ $expected =~ ^[0-9a-f]{64}$ && $line == "$expected  $name" && $stored == "$name" ]] || return 2
+    actual=$(sha256sum -- "$path") || return 2
+    [[ ${actual%% *} == "$expected" ]] || return 2
+    had_checksum=1
+  fi
   gzip -t -- "$path" || return 2
-  printf 'Backup DB hợp lệ về checksum và gzip: %s\n' "$name"
+  if ((had_checksum)); then
+    printf 'Backup DB đạt kiểm tra SHA-256 và gzip: %s\n' "$name"
+  else
+    printf 'Backup DB đọc được bằng gzip (không có checksum riêng): %s\n' "$name"
+  fi
   printf 'Chưa chứng minh SQL import hoặc dữ liệu ứng dụng nhất quán.\n'
 }
 
@@ -317,11 +331,11 @@ kw_db_import_plan() {
   kw_db_ready || return 2
   kw_db_meta_lookup "$domain" || return 2
   id=${KW_SITE_OWNER#kw}
-  if ! kw_db_backup_name_valid "$name" || [[ $name != db-${id}-* ]]; then return 2; fi
+  kw_db_backup_for_site "$id" "$name" || return 2
   kw_db_backup_verify "$name" || return 2
   printf 'Kế hoạch import DB: %s → %s (%s)\n' "$name" "$KW_DB_NAME" "$domain"
-  printf 'Tự export DB hiện tại trước; sau đó chạy SQL từ backup.\n'
-  printf 'Import không nguyên tử; nếu SQL lỗi, DB có thể chỉ được khôi phục một phần.\n'
+  printf 'Không tự export DB hiện tại. Hãy tự backup nếu cần trước khi xác nhận.\n'
+  printf 'Import không nguyên tử và không tự hoàn tác; nếu SQL lỗi, DB có thể chỉ được khôi phục một phần.\n'
 }
 
 kw_db_import_locked() (
@@ -329,17 +343,16 @@ kw_db_import_locked() (
   kw_db_ready || return 2
   kw_db_meta_lookup "$domain" || return 2
   id=${KW_SITE_OWNER#kw}
-  if ! kw_db_backup_name_valid "$name" || [[ $name != db-${id}-* ]]; then return 2; fi
+  kw_db_backup_for_site "$id" "$name" || return 2
   kw_db_backup_verify "$name" >/dev/null || return 2
   kw_db_exists "$id" || return 2
-  kw_db_export_locked "$domain" || return 1
   option_file=$(mktemp /run/kwvps-db-client.XXXXXXXX) || return 1
   trap '[[ -z $option_file ]] || rm -f -- "$option_file"' EXIT
   chmod 0600 -- "$option_file" || return 1
   printf '[client]\nuser=%s\npassword=%s\n' "$KW_DB_USER" "$KW_DB_PASSWORD" > "$option_file" || return 1
   if ! gzip -cd -- "$KW_BACKUP_ROOT/$name" | \
       mariadb --defaults-extra-file="$option_file" --protocol=socket "$KW_DB_NAME"; then
-    kw_log ERROR 'Import lỗi; DB có thể ở trạng thái một phần. Bản export trước import đã được giữ.'
+    kw_log ERROR 'Import lỗi; DB có thể ở trạng thái một phần và không có bản export tự động để hoàn tác.'
     return 1
   fi
   printf 'Đã import %s vào %s. Cần kiểm tra dữ liệu ứng dụng.\n' "$name" "$KW_DB_NAME"
@@ -372,7 +385,7 @@ kw_db_drop_plan() {
   kw_db_ready || return 2
   kw_db_meta_lookup "$domain" || return 2
   printf 'Kế hoạch xóa DB KwVPS: %s (%s)\n' "$KW_DB_NAME" "$domain"
-  printf 'Tự export kèm checksum trước khi DROP; giữ metadata cũ trong vùng root-only.\n'
+  printf 'Tự export trước khi DROP; giữ metadata cũ trong vùng root-only.\n'
   printf 'Source site, Nginx, PHP và các backup khác không bị xóa.\n'
 }
 

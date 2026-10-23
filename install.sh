@@ -106,7 +106,7 @@ install_preflight() {
 }
 
 install_apply() {
-  local result=0 phrase file candidate release_repo
+  local result=0 phrase file candidate release_repo service
   ((EUID == 0)) || { printf 'Cần sudo/root để cài.\n' >&2; return 2; }
   install_preflight || result=$?
   if ((result == 10)); then return 0; fi
@@ -131,6 +131,14 @@ install_apply() {
   }
   kw_php_security_ready 8.3 || return 2
   systemctl enable --now nginx php8.3-fpm mariadb fail2ban cron || return 1
+  php-fpm8.3 -t || return 1
+  nginx -t || return 1
+  for service in nginx php8.3-fpm mariadb fail2ban cron; do
+    systemctl is-active --quiet "$service" || {
+      kw_log ERROR "$service chưa active sau cài đặt."
+      return 1
+    }
+  done
   install -d -m 0755 /opt/kwvps /opt/kwvps/src /opt/kwvps/scripts /var/www/kwvps || return 1
   install -d -m 0755 /etc/kwvps /etc/kwvps/sites || return 1
   install -m 0755 "$KW_INSTALL_ROOT/kwvps" /opt/kwvps/kwvps || return 1

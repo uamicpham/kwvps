@@ -307,9 +307,8 @@ kw_tunnel_config_interactive() {
       kw_tunnel_tokenfile_supported || { kw_log ERROR 'cloudflared cần bản 2025.4.0 trở lên cho --token-file.'; return 2; }
       kw_tunnel_guide --no-site-prompt
       while :; do
-        printf 'Dán Tunnel token (ẩn ký tự; 0 hoặc Enter để quay lại): '
-        IFS= read -r -s token || { printf '\n'; return 0; }
-        printf '\n'
+        printf 'Dán Tunnel token (hiển thị khi nhập; 0 hoặc Enter để quay lại): '
+        IFS= read -r token || return 0
         [[ $token != 0 && -n $token ]] || return 0
         kw_tunnel_token_valid "$token" && break
         printf 'Tunnel token không hợp lệ (40–4096 ký tự, không khoảng trắng). Nhập lại.\n'

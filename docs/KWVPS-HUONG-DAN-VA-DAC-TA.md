@@ -113,7 +113,7 @@ Ngoại lệ kỹ thuật phải nói rõ trên màn hình: khi nano đang mở,
 - Mặc định từ chối khi câu hỏi xác nhận không có trả lời; thao tác xóa yêu cầu nhập lại đúng domain/tên DB.
 - Các bước đọc chỉ cần quyền tối thiểu; thao tác ghi yêu cầu sudo thích hợp.
 - Có chế độ xem trước đối với thao tác thay đổi; không hứa mô phỏng hoàn toàn mọi hook cài gói.
-- Sao lưu cấu hình trước sửa, kiểm tra cú pháp trước reload, ghi nhật ký không chứa bí mật.
+- Sao lưu cấu hình trước sửa; kiểm tra cú pháp, restart dịch vụ liên quan rồi xác nhận trạng thái active; thử health check site khi thay đường phục vụ. Ghi nhật ký không chứa bí mật.
 - Không tự reboot, không xóa database theo tên đoán, không dùng phân quyền 777 để chữa lỗi.
 - Ctrl+C dọn file tạm/khóa; không tự nhận đã rollback những thay đổi gói hoặc dữ liệu không thể hoàn tác.
 
@@ -213,7 +213,7 @@ Mất kết nối: dùng console nhà cung cấp và bản cấu hình trước 
 
 ## 5. DB — menu chính 4
 
-Bản hiện tại có đúng thứ tự menu bên dưới. Chỉ liệt kê/ghi DB do KwVPS quản lý, gồm DB per-site cũ và DB mới tự đặt tên. Danh sách DB/user chỉ hiện số thứ tự và tên. Tạo DB mới chọn site theo số rồi nhập tên DB, user, mật khẩu (12–128 ký tự trong tập chữ/số và `_!@#%+=.-`). Import chọn file `.sql`/`.sql.gz` trong cùng thư mục backup `/var/backups/kwvps` theo số trước, sau đó chọn xem tất cả DB hoặc lọc theo site, cuối cùng chọn DB đích. Bộ lọc site chỉ đổi danh sách chọn, không tự tạo DB mới. Menu cảnh báo nếu DB đã có bảng, tự export bản hiện tại rồi mới import bằng user quyền giới hạn. Thư mục backup chỉ root truy cập, nên file từ máy khác phải được chuyển vào đó bằng quyền root; file cũ trong `/home/db` không còn được quét. Nếu file đã upload vào `/home/db`, người quản trị cần tự sao chép file cụ thể vào thư mục backup với quyền `root:root`, chế độ `0600`, rồi kiểm tra tên và dung lượng trước khi import. Không tự chuyển hay xóa file cũ khi nâng cấp. Xóa hiển thị DB/user/site và hỏi `y/N`; thao tác vẫn tự giữ export. Đổi pass không tự cập nhật `.env` của ứng dụng. Những mục bên dưới mô tả mục tiêu rộng hơn, không phải mọi tùy chọn đã có.
+Bản hiện tại có đúng thứ tự menu bên dưới. Chỉ liệt kê/ghi DB do KwVPS quản lý, gồm DB per-site cũ và DB mới tự đặt tên. Danh sách DB/user chỉ hiện số thứ tự và tên. Tạo DB mới chọn site theo số rồi nhập tên DB, user, mật khẩu (12–128 ký tự trong tập chữ/số và `_!@#%+=.-`). Khi tạo hoặc đổi mật khẩu DB, ký tự sẽ hiện trong terminal lúc nhập để bạn kiểm tra; KwVPS không in lại mật khẩu sau đó. Chỉ nhập khi màn hình PuTTY không bị chia sẻ hoặc ghi hình. Import chọn file `.sql`/`.sql.gz` trong cùng thư mục backup `/var/backups/kwvps` theo số trước, sau đó chọn xem tất cả DB hoặc lọc theo site, cuối cùng chọn DB đích. Bộ lọc site chỉ đổi danh sách chọn, không tự tạo DB mới. Menu cảnh báo nếu DB đã có bảng nhưng **không tự export hiện trạng**; hãy chọn Export DB thủ công trước khi import nếu cần giữ dữ liệu đích. Import dùng user quyền giới hạn và có thể để lại dữ liệu một phần nếu SQL lỗi; không có rollback tự động. Export DB mới chỉ tạo một file `db-<tên-DB>-YYYYMMDD-HHMMSS[-N].sql.gz`, không kèm `.sha256`; file backup cũ được giữ nguyên và vẫn có thể dùng để restore. Thư mục backup chỉ root truy cập, nên file từ máy khác phải được chuyển vào đó bằng quyền root; file cũ trong `/home/db` không còn được quét. Nếu file đã upload vào `/home/db`, người quản trị cần tự sao chép file cụ thể vào thư mục backup với quyền `root:root`, chế độ `0600`, rồi kiểm tra tên và dung lượng trước khi import. Không tự chuyển hay xóa file cũ khi nâng cấp. Xóa hiển thị DB/user/site và hỏi `y/N`; thao tác vẫn tự giữ export. Đổi pass không tự cập nhật `.env` của ứng dụng. Những mục bên dưới mô tả mục tiêu rộng hơn, không phải mọi tùy chọn đã có.
 
 ```text
 1. Danh sách DB
@@ -231,13 +231,13 @@ Nền tảng mặc định đề xuất: MariaDB. Không tuyên bố hỗ trợ 
 - **Danh sách:** tên DB, dung lượng ước tính, site liên kết và user được cấp quyền; không đọc nội dung bảng hoặc in mật khẩu.
 - **Tạo:** nhập tên hợp lệ, chọn charset/collation phù hợp ứng dụng, tạo user riêng chỉ có quyền cần thiết trên DB đó. Bí mật lưu quyền hạn chế; không đưa vào command line, Git hoặc log.
 - **Xóa:** chặn DB hệ thống, hiện site phụ thuộc, hỏi `y/N`. Bản thử tự export trước khi DROP và chỉ xóa user thuộc DB KwVPS đã chọn.
-- **Import:** chọn file và DB đích; kiểm tra định dạng/dung lượng, cảnh báo SQL có thể chứa DROP/CREATE/USE hoặc tác động ngoài dự kiến. Dùng tài khoản giới hạn quyền. Backup đích trước; import lỗi có thể để dữ liệu dở dang và không đảm bảo rollback giao dịch toàn file.
-- **Export:** chọn DB, đường dẫn đích trong vùng backup, có nén không; chọn cách đảm bảo nhất quán theo engine. Dump cần tính tới routines/triggers/events và quyền cần thiết. Kiểm tra exit code, checksum và thử restore định kỳ; file tồn tại không chứng minh dump tốt.
+- **Import:** chọn file và DB đích; kiểm tra định dạng/dung lượng, cảnh báo SQL có thể chứa DROP/CREATE/USE hoặc tác động ngoài dự kiến. Dùng tài khoản giới hạn quyền. Nếu cần giữ DB đích, tự chọn Export DB trước; import không tự backup, lỗi có thể để dữ liệu dở dang và không đảm bảo rollback giao dịch toàn file.
+- **Export:** chọn DB; bản hiện tại tạo một file `.sql.gz` trong vùng backup, không kèm file hash. Dump cần tính tới routines/triggers/events và quyền cần thiết. Kiểm tra exit code, định dạng gzip và thử restore định kỳ; file tồn tại không chứng minh dump tốt. Không có checksum riêng nên không thể dùng KwVPS để xác nhận file chưa bị thay đổi sau khi sao chép.
 - **Remote:** chọn bind address, IP/CIDR nguồn, TLS và user remote giới hạn. Mở đúng port/nguồn qua module Firewall, kiểm tra firewall nhà cung cấp. Mặc định không mở toàn Internet, không cấp remote root. Nên ưu tiên mạng riêng hoặc SSH tunnel nếu phù hợp.
 
 ## 6. PHP — menu chính 5
 
-Bản thử hiện tại: trước tiên chọn site bằng số. Menu PHP có mục kiểm tra bản vá theo gói thực tế; cấu hình pool cho chỉnh `pm.max_children` (1–128) hoặc `pm.max_requests` (1–10000), sao lưu và kiểm tra PHP-FPM rồi reload. Mục đổi phiên bản chọn 8.5/8.4/8.3/7.4; PHP 7.4 có thể dùng khi tạo/clone/đổi tên/chuyển site sau xác nhận EOL riêng cho thao tác, các bản còn hỗ trợ phải đạt bản vá. Ubuntu 24.04 PHP 8.3 cần revision `8.3.6-0ubuntu0.24.04.13` trở lên; upstream 8.3/8.4/8.5 cần tối thiểu 8.3.36/8.4.27/8.5.12. Mục **Cài gói PHP-FPM** dùng APT hiện tại trước; nếu thiếu package phù hợp, hỏi `y/N` trước khi thêm/cập nhật PPA Ubuntu `ppa:ondrej/php` của Ondřej Surý, không dùng kho Debian `deb.sury.org`. Khi thêm nguồn mới, KwVPS ghim ưu tiên PPA ở mức 100 để gói Ubuntu vẫn được ưu tiên; kiểm tra nguồn candidate, kiểm tra bản vá với PHP 8.x, mô phỏng APT và hỏi trước khi cài PHP-FPM cùng extension. PHP 7.4 luôn được đánh dấu EOL/chưa xác minh an toàn. Custom pool mở bản tạm trong nano, không cho đổi user/group/socket/ràng buộc an toàn, kiểm tra trước khi áp. Mục ionCube nhận file loader Linux x86-64 chính thức tại `/root/kwvps-loaders/ioncube_loader_lin_<version>.so` cùng SHA-256 lấy độc lập; bật/tắt cho **toàn bộ PHP-FPM version**, không phải từng site. Kiểm tra bằng PHP CLI, FPM và có rollback khi bật lỗi. Chưa thử với loader thật. Những mô tả mở rộng bên dưới là đặc tả mục tiêu, không đồng nghĩa đã có đủ trong bản thử.
+Bản thử hiện tại: trước tiên chọn site bằng số. Menu PHP có mục kiểm tra bản vá theo gói thực tế; cấu hình pool cho chỉnh `pm.max_children` (1–128) hoặc `pm.max_requests` (1–10000), sao lưu, kiểm tra `php-fpm<version> -t`, restart rồi xác nhận service active. Mục đổi phiên bản chọn 8.5/8.4/8.3/7.4; PHP 7.4 có thể dùng khi tạo/clone/đổi tên/chuyển site sau xác nhận EOL riêng cho thao tác, các bản còn hỗ trợ phải đạt bản vá. Ubuntu 24.04 PHP 8.3 cần revision `8.3.6-0ubuntu0.24.04.13` trở lên; upstream 8.3/8.4/8.5 cần tối thiểu 8.3.36/8.4.27/8.5.12. Mục **Cài gói PHP-FPM** dùng APT hiện tại trước; nếu thiếu package phù hợp, hỏi `y/N` trước khi thêm/cập nhật PPA Ubuntu `ppa:ondrej/php` của Ondřej Surý, không dùng kho Debian `deb.sury.org`. Khi thêm nguồn mới, KwVPS ghim ưu tiên PPA ở mức 100 để gói Ubuntu vẫn được ưu tiên; kiểm tra nguồn candidate, kiểm tra bản vá với PHP 8.x, mô phỏng APT và hỏi trước khi cài PHP-FPM cùng extension. PHP 7.4 luôn được đánh dấu EOL/chưa xác minh an toàn. Custom pool mở bản tạm trong nano, không cho đổi user/group/socket/ràng buộc an toàn, kiểm tra trước khi áp. Mục ionCube nhận file loader Linux x86-64 chính thức tại `/root/kwvps-loaders/ioncube_loader_lin_<version>.so` cùng SHA-256 lấy độc lập; bật/tắt cho **toàn bộ PHP-FPM version**, không phải từng site. Kiểm tra bằng PHP CLI, FPM và có rollback khi bật lỗi. Chưa thử với loader thật. Những mô tả mở rộng bên dưới là đặc tả mục tiêu, không đồng nghĩa đã có đủ trong bản thử.
 
 Trên Ubuntu 24.04 lab, PPA có PHP 8.4.27/8.5.12 nhưng cần `php-common` mới hơn bản Ubuntu. Nếu mô phỏng APT báo đúng phụ thuộc này, KwVPS kiểm tra nguồn và mức phiên bản `php-common` từ cùng PPA, thêm đúng gói vào kế hoạch, mô phỏng lại với điều kiện không gỡ package rồi mới hỏi xác nhận cài. Đây là gói dùng chung, có thể ảnh hưởng các bản PHP đã cài; việc cài PHP CLI cũng có thể đổi lệnh `php` mặc định toàn VPS (lab đã chuyển từ 8.3 sang 8.5). Phiên bản FPM gắn với từng site không tự thay đổi. Trên VPS lab đã thử tạo site với 8.4 và chuyển sang 8.5, kiểm socket/HTTP 200; site thử đã xóa sạch sau đó.
 
@@ -251,7 +251,7 @@ Trên Ubuntu 24.04 lab, PPA có PHP 8.4.27/8.5.12 nhưng cần `php-common` mớ
 ```
 
 - **Pool:** chọn site; sửa pm mode, max_children, các giới hạn worker, timeout, memory/upload và slowlog trong phạm vi thích hợp. Hiện ngân sách RAM tổng vì nhiều pool có thể cùng hoạt động. Không tính max_children chỉ từ RAM tổng mà bỏ qua DB/Redis/hệ điều hành.
-- **Đổi version:** kiểm tra PHP đích, extensions, ionCube và tương thích ứng dụng; tạo/kiểm tra pool đích, đổi socket Nginx, kiểm tra và reload, chạy health check; lỗi thì trả về cấu hình/socket cũ. Không đổi đồng loạt các domain khác.
+- **Đổi version:** kiểm tra PHP đích, extensions và ionCube; chuyển pool sang phiên bản mới nhưng giữ nguyên đường socket/vhost Nginx, kiểm tra cú pháp, restart hai PHP-FPM liên quan, xác nhận active và socket. Nếu site có `public/index.php`, KwVPS thử HTTP/PHP qua loopback trước/sau; HTTP 2xx/3xx trước đổi nhưng 5xx hoặc không kết nối sau đổi sẽ thử rollback. Vẫn cần thử các đường dẫn và tính tương thích ứng dụng; site không có `index.php` chỉ được kiểm tra FPM/socket. Không đổi đồng loạt các domain khác.
 - **ionCube:** xác minh loader hỗ trợ đúng PHP, kiến trúc và môi trường; tải nguồn chính thức. Bật theo PHP version có thể ảnh hưởng mọi site dùng version đó, phải hiển thị danh sách bị ảnh hưởng. Phân biệt FPM và CLI, không hứa cách ly ionCube theo domain nếu dùng chung runtime.
 - **Custom pool:** nano chỉnh bản tạm; kiểm tra cấu hình với binary PHP-FPM đúng phiên bản trước áp dụng. Giữ bản trước sửa. Chặn thay đổi owner/socket làm vượt mô hình cách ly hoặc phải yêu cầu xác nhận rõ. Thoát nano không lưu thì không thay đổi cấu hình thật.
 
@@ -266,9 +266,9 @@ Trên Ubuntu 24.04 lab, PPA có PHP 8.4.27/8.5.12 nhưng cần `php-common` mớ
 
 - **Phục hồi:** chọn site và bản backup hoặc tái tạo từ metadata/template. Giữ SSL, PHP socket, cache, rate limit và Tunnel của site; hiển thị diff và cảnh báo custom config bị thay thế.
 - **Baseline global:** bản cấu hình nền có phiên bản; hiện thay đổi và toàn bộ site bị ảnh hưởng. Không ghi đè file người dùng quản lý hoặc lặp lại include Real IP. Không tự chọn thông số “tối ưu” cực đoan cho mọi cấu hình VPS.
-- **Kiểm tra:** chạy kiểm tra cú pháp toàn bộ cấu hình, trùng hostname/listen, socket đích và chứng chỉ. Cú pháp đúng không đảm bảo website đúng; cần health check sau reload.
+- **Kiểm tra:** chạy kiểm tra cú pháp toàn bộ cấu hình, trùng hostname/listen, socket đích và chứng chỉ. Cú pháp đúng không đảm bảo website đúng; sau khi thay cấu hình cần restart, xác nhận Nginx active và thử HTTP/health check đối với site bị ảnh hưởng.
 
-Ưu tiên reload sau kiểm tra thay vì restart. Ghi cấu hình theo giao dịch: lưu trước → chuẩn bị → validate → áp dụng → kiểm tra → hoàn tác cấu hình nếu cần. Không để một menu ghi trực tiếp đè file của menu khác.
+Ghi cấu hình theo giao dịch: lưu trước → chuẩn bị → kiểm tra cú pháp → restart → xác nhận dịch vụ active và health check site khi phù hợp → hoàn tác cấu hình nếu lỗi. Restart có thể gây gián đoạn ngắn; nên thực hiện trong khung bảo trì với site quan trọng. Không để một menu ghi trực tiếp đè file của menu khác.
 
 ## 8. Fail2ban — menu chính 7
 
@@ -299,7 +299,7 @@ Bản 0.39 đã nâng lên VPS thử nghiệm. Mục 1 mô phỏng gói Ubuntu r
 
 - **Kết nối từ PuTTY:** trong Connection → SSH → Tunnels, điền Source port `9080`, Destination `127.0.0.1:9080`, chọn Local → Add, rồi kết nối lại. Mở `http://127.0.0.1:9080` trên chính máy tính. Kết nối HTTP chỉ đi qua đường hầm SSH; không mở UFW port 9080, không dùng URL public.
 - **Theo site:** chọn site theo danh sách đánh số; menu hiện tên DB/user KwVPS quản lý. Đăng nhập bằng user/mật khẩu DB đã tạo cho site. Quyền đọc/ghi thực tế do GRANT của MariaDB quyết định, không chỉ do giao diện hiển thị.
-- **Admin tất cả DB:** tạo `kwvps_admin@localhost` với mật khẩu riêng và quyền toàn bộ database nhưng không có GRANT OPTION; không dùng root qua web. Có thể đổi mật khẩu qua menu. Chỉ tạo sau xác nhận `y/N`; không đặt mật khẩu vào URL hoặc lưu trong cấu hình KwVPS.
+- **Admin tất cả DB:** tạo `kwvps_admin@localhost` với mật khẩu riêng và quyền toàn bộ database nhưng không có GRANT OPTION; không dùng root qua web. Có thể đổi mật khẩu qua menu; ký tự hiện lúc nhập nhưng không được KwVPS in lại. Chỉ tạo sau xác nhận `y/N`; không đặt mật khẩu vào URL hoặc lưu trong cấu hình KwVPS.
 - phpMyAdmin không được cài khi chỉ xem URL. Không công khai mặc định trên mọi domain hoặc lưu session trong source site. Tài khoản admin đã được thử tạo/đăng nhập/xóa trên VPS lab; chưa kiểm thử trình duyệt qua PuTTY của người dùng. Không dùng trên VPS chứa website quan trọng.
 
 ## 10. Cron — menu chính 9
@@ -424,13 +424,13 @@ Nếu đã lưu `owner/repo` công khai, menu đọc GitHub Release mới nhất
 
 ### Ubuntu
 
-“Cập nhật Ubuntu” làm mới danh mục APT trước khi lập kế hoạch rồi chỉ nâng package của bản đang dùng, **không nâng bản 24.04 sang bản khác**. Nếu nguồn APT lỗi, PHP-FPM candidate đang chờ nâng chưa đạt ngưỡng vá, hoặc kế hoạch định gỡ package, KwVPS dừng. Chờ unattended-upgrades/apt đang chạy; không xóa lock. Thực hiện trong khung bảo trì; không tự reboot. Sau cập nhật phải kiểm tra website/dịch vụ và tự quyết định reboot.
+“Cập nhật Ubuntu” làm mới danh mục APT trước khi lập kế hoạch rồi chỉ nâng package của bản đang dùng, **không nâng bản 24.04 sang bản khác**. Nếu nguồn APT lỗi, PHP-FPM candidate đang chờ nâng chưa đạt ngưỡng vá, hoặc kế hoạch định gỡ package, KwVPS dừng. Chờ unattended-upgrades/apt đang chạy; không xóa lock. Thực hiện trong khung bảo trì; không tự reboot. Sau APT, KwVPS kiểm tra `nginx -t`, cú pháp các PHP-FPM trước đó đang chạy và trạng thái active của các dịch vụ được quản lý trước đó đang chạy; không ép restart lần hai vì APT có thể đã restart. Vẫn cần thử website và tự quyết định reboot.
 
 ### Service
 
 Kiểm tra: Nginx, từng PHP-FPM version, MariaDB, Redis, Fail2ban, UFW, Cloudflared. Thành phần chưa cài hiển thị “chưa cài”, không tự cài chỉ để xem version. Phân biệt version package đang cài và tiến trình đang chạy.
 
-Mục chỉ xem danh sách chờ update dùng cache APT hiện tại. Khi chọn **áp dụng** cập nhật dịch vụ, menu làm mới danh mục APT, kiểm tra candidate PHP, mô phỏng kế hoạch và hỏi `y/N`. Từ chối kế hoạch gỡ hoặc cài package ngoài danh sách service đã chọn. “An toàn” chỉ là các rào chắn trước/sau; **không bảo đảm không downtime** vì maintainer scripts có thể restart dịch vụ và package APT không được KwVPS rollback tự động.
+Mục chỉ xem danh sách chờ update dùng cache APT hiện tại. Khi chọn **áp dụng** cập nhật dịch vụ, menu làm mới danh mục APT, kiểm tra candidate PHP, mô phỏng kế hoạch và hỏi `y/N`. Từ chối kế hoạch gỡ hoặc cài package ngoài danh sách service đã chọn. Sau APT, kiểm tra Nginx/PHP-FPM và trạng thái các dịch vụ trước đó đang chạy, nhưng không ép restart lần hai. “An toàn” chỉ là các rào chắn trước/sau; **không bảo đảm không downtime** vì maintainer scripts có thể restart dịch vụ và package APT không được KwVPS rollback tự động.
 
 Major upgrade MariaDB/PHP và đổi repository cần quy trình riêng, không gộp vào cập nhật package thông thường. Không tự downgrade database để chữa lỗi vì định dạng dữ liệu có thể không tương thích.
 
@@ -450,13 +450,15 @@ Major upgrade MariaDB/PHP và đổi repository cần quy trình riêng, không 
 
 Bản thử `0.18.1-dev` chọn site và bản backup theo số. Từ `0.50.6`, backup cấu hình có site metadata, PHP-FPM pool, Nginx vhost và — nếu site đã lưu Zone ID — một file token Cloudflare riêng mã hóa bằng mật khẩu. Tải về cả archive `.tar.gz`, file `.cf.enc` và hai checksum; mất mật khẩu thì không thể khôi phục token. Restore yêu cầu site hiện hữu cùng ID/domain, cùng PHP và cùng chế độ HTTP/HTTPS; tự backup cấu hình hiện tại, kiểm tra dịch vụ và health check rồi xác minh token/zone với Cloudflare. Chưa có source, DB, cron/cache/Tunnel tùy biến, chứng chỉ/private key trong gói; chưa phải backup chuyển VPS đầy đủ. Bảng phạm vi bên dưới là đặc tả mục tiêu đầy đủ hơn, không nên hiểu là tất cả đã triển khai.
 
+Tên file backup mới: `source-<domain>-YYYYMMDD-HHMMSS[-N].tar.gz` cho source và `config-<domain>-YYYYMMDD-HHMMSS[-N].tar.gz` cho cấu hình; nếu domain quá dài để tạo tên file an toàn, KwVPS dùng site ID. `-N` chỉ xuất hiện khi cần tránh trùng tên. Cả hai archive vẫn có file `.sha256` tương ứng; backup cấu hình có token Cloudflare còn có file phụ `.cf.enc` mã hóa cùng checksum riêng. Khi tải backup cấu hình sang máy khác, giữ đầy đủ các file phụ và mật khẩu mã hóa. Archive có tên kiểu cũ vẫn được liệt kê và phục hồi, không tự đổi tên hoặc xóa khi nâng cấp.
+
 ### Phạm vi backup phải rõ
 
 | Loại | Có gì | Không mặc định bao gồm |
 |---|---|---|
 | Full cấu hình domain | Metadata site, vhost, pool, custom config, cache/rate-limit, cron do KwVPS quản lý, liên kết SSL/Tunnel | Source, dump DB, toàn bộ hệ điều hành, tài nguyên Cloudflare từ xa |
 | Source/code | File ứng dụng và metadata quyền trong document root được chọn | DB, Nginx/PHP config, file ngoài root, cache/log trừ khi chọn |
-| Export DB | Dump DB theo menu DB | Source/config |
+| Export DB | Một file dump `.sql.gz` theo menu DB, không có `.sha256` mới | Source/config |
 
 “Full cấu hình domain” không có nghĩa full website. Muốn khôi phục website hoàn chỉnh phải có cấu hình + source + DB nhất quán. Có thể đề xuất wizard gộp ba loại sau này nhưng không âm thầm thay đổi phạm vi yêu cầu.
 
@@ -487,7 +489,7 @@ Không ghi đè user/UID hoặc owner từ archive một cách mù quáng. Resto
 
 - **Chưa cài cloudflared:** mục 1 hiện `1. Cài cloudflared từ kho APT Cloudflare`, `2. Hướng dẫn tạo Tunnel`, `0. Quay lại`. Cài chỉ sau `y/N`, lấy package từ kho chính thức `pkg.cloudflare.com/cloudflared` cho Ubuntu Noble; không tạo service, không đổi DNS/firewall.
 - **Đã cài cloudflared:** mục 1 hiện `1. Hướng dẫn tạo Tunnel và route theo site`, `2. Lưu/thay Tunnel token và cấu hình service`, `3. Kiểm tra trạng thái service`, `4. Ghi nhận chế độ từng site`, `0. Quay lại`. Mỗi site có chế độ `Tunnel` hoặc `DNS thông thường` (DNS only hay đám mây cam); KwVPS chỉ ghi nhận trạng thái, còn route/DNS phải đối chiếu trên Dashboard.
-- **Tạo Tunnel:** vào Cloudflare Dashboard → Networking → Tunnels → Create Tunnel, tạo Tunnel loại Cloudflared được quản lý trên Cloudflare. Sao chép **riêng Tunnel token**, không dán cả lệnh cài hoặc gửi token qua chat. Quay lại menu, chọn mục 2 và dán token vào ô nhập ẩn; KwVPS lưu ở `/etc/kwvps/cloudflare/tunnel-token` quyền root-only, tạo `cloudflared.service` dùng `--token-file`, khởi động và kiểm tra service. Nếu đã có service từ ngoài KwVPS thì từ chối ghi đè. Bản cloudflared cần từ 2025.4.0 trở lên.
+- **Tạo Tunnel:** vào Cloudflare Dashboard → Networking → Tunnels → Create Tunnel, tạo Tunnel loại Cloudflared được quản lý trên Cloudflare. Sao chép **riêng Tunnel token**, không dán cả lệnh cài hoặc gửi token qua chat. Quay lại menu, chọn mục 2 và dán token; ký tự sẽ hiện trong terminal khi nhập để bạn kiểm tra, nhưng KwVPS không in lại token sau đó. Chỉ nhập khi màn hình PuTTY không bị chia sẻ hoặc ghi hình. KwVPS lưu token ở `/etc/kwvps/cloudflare/tunnel-token` quyền root-only, tạo `cloudflared.service` dùng `--token-file`, khởi động và kiểm tra service. Nếu đã có service từ ngoài KwVPS thì từ chối ghi đè. Bản cloudflared cần từ 2025.4.0 trở lên.
 - **Hostname/route:** trong Tunnel → Routes → Add route → Published application, chọn đúng hostname/site. Site HTTP dùng `http://127.0.0.1:80`; site HTTPS dùng `https://127.0.0.1:443` và đặt Origin Server Name bằng hostname thật để kiểm tra chứng chỉ. Kiểm tra route/DNS trùng và thử hostname từ ngoài trước khi cân nhắc đổi firewall. KwVPS chưa tự tạo route hoặc DNS trên Cloudflare; Tunnel token khác API token ở menu Bảo mật/Cloudflare.
 - **Trạng thái:** service cloudflared, kết nối tới edge và kiểm tra hostname công khai; service active chưa chứng minh website dùng được.
 - **Restart:** hiển thị tất cả hostname chịu ảnh hưởng vì một Tunnel có thể phục vụ nhiều site, xác nhận trước restart.
@@ -529,11 +531,11 @@ Bản thử `0.25.0-dev` đã có thao tác cập nhật thật: chọn mục 1,
 - Cấu hình dùng chung chỉ tạo một lần; mỗi site dùng đúng chế độ ingress. Tunnel có trust boundary riêng như mục 18, không đơn giản thêm public CIDR rồi kết luận xong.
 - Cập nhật danh sách nguyên tử, giữ bản tốt cuối cùng khi tải lỗi; không áp dụng danh sách rỗng.
 - Nếu danh sách CIDR còn được dùng trong firewall origin-only thì cập nhật có phối hợp, không để một bên dùng danh sách mới một bên dùng danh sách cũ gây gián đoạn.
-- Kiểm tra Nginx rồi reload; xác minh log bằng request kiểm soát, giữ cả visitor IP và proxy peer ở format log nếu cần điều tra.
+- Kiểm tra `nginx -t`, restart rồi xác nhận Nginx active; xác minh log bằng request kiểm soát, giữ cả visitor IP và proxy peer ở format log nếu cần điều tra.
 
 ### 19.2. AntiDDoS theo domain
 
-Hai bài người dùng cung cấp trình bày chuỗi: Real IP → rate limiting Nginx → log vi phạm → CSF/LFD đẩy IP lên Cloudflare. Menu `kwvps` → `18` Công cụ nâng cao → `1` Bảo mật/Cloudflare → `2` AntiDDoS theo domain hiện tách hai cách: **(1) Nginx local** và **(2) Cloudflare Rate Limiting**. Cách Nginx: chọn site, 5/10/20/50 request/giây hoặc tắt, xác nhận `y/N`; cần Cloudflare Real IP ở mục 1. Vượt ngưỡng trả HTTP 429, burst gấp đôi rate. Trạng thái ở `/etc/kwvps/cloudflare/antiddos/`, cấu hình ở `/etc/nginx/conf.d/kwvps-antiddos.conf`; script kiểm tra cú pháp/reload và hoàn tác nếu lỗi. Đã thử HTTPS loopback 40 request ở mức 5: 14 lần 200, 26 lần 429; sau thử đã tắt lại.
+Hai bài người dùng cung cấp trình bày chuỗi: Real IP → rate limiting Nginx → log vi phạm → CSF/LFD đẩy IP lên Cloudflare. Menu `kwvps` → `18` Công cụ nâng cao → `1` Bảo mật/Cloudflare → `2` AntiDDoS theo domain hiện tách hai cách: **(1) Nginx local** và **(2) Cloudflare Rate Limiting**. Cách Nginx: chọn site, 5/10/20/50 request/giây hoặc tắt, xác nhận `y/N`; cần Cloudflare Real IP ở mục 1. Vượt ngưỡng trả HTTP 429, burst gấp đôi rate. Trạng thái ở `/etc/kwvps/cloudflare/antiddos/`, cấu hình ở `/etc/nginx/conf.d/kwvps-antiddos.conf`; script kiểm tra `nginx -t`, restart, xác nhận Nginx active và hoàn tác nếu lỗi. Đã thử HTTPS loopback 40 request ở mức 5: 14 lần 200, 26 lần 429; sau thử đã tắt lại.
 
 Cách Cloudflare dùng Rulesets API, đếm mỗi IP tại biên trong cửa sổ 10 giây và block 10 giây khi vượt mức 50/100/200/500 request. Với gói Pro trở lên, điều kiện `http.host` chỉ áp cho hostname đã chọn. Cloudflare **Free** không hỗ trợ điều kiện hostname: menu hiện rõ tên zone, cảnh báo **mọi hostname/subdomain** đều chịu rule và hỏi `y/N` trước khi tạo. Rule toàn zone dùng expression `true`, có state riêng theo Zone ID; tắt rule cũng báo phạm vi toàn zone. Chỉ tạo/xóa rule mang dấu KwVPS, không thay toàn bộ ruleset. Từ `0.50.6`, chức năng yêu cầu token đã lưu cho site tại menu API token với `Zone WAF Read` và `Zone WAF Write` (ngoài quyền Under Attack); token chung/theo zone kiểu cũ không còn được dùng. KwVPS gọi `dry_run=true` trước khi tạo để Cloudflare xác thực cấu hình/quyền/quota mà chưa ghi rule; lỗi hiển thị mã và lý do đã lọc bí mật. Trên VPS thử nghiệm zone `kenhgamez.top` đang Free: dry-run đã đạt HTTP 200 sau khi sửa `kind: zone`; chưa bật rule thật vì người dùng cần chọn mức và xác nhận `y/N`. Không coi mức Cloudflare và mức Nginx là cùng một cơ chế dù cả hai hiển thị req/s tương đương.
 
@@ -553,7 +555,7 @@ Luồng sử dụng:
 6. Chọn ngoại lệ có kiểm soát cho webhook/API/monitoring, đăng nhập hoặc thanh toán; tránh ngoại lệ rộng cho phép bỏ qua bảo vệ. Không bỏ query string khỏi cache key toàn site vì có thể trả nhầm dữ liệu.
 7. Ưu tiên chế độ quan sát/dry-run nếu bản Nginx hỗ trợ, kiểm tra log trước khi enforce. NAT dùng chung IP có thể khiến khách thật bị hạn chế.
 8. Tùy chọn tự ban ở Cloudflare: chọn ngưỡng vi phạm trong cửa sổ thời gian, thời gian ban, allowlist, giới hạn số ban, zone và backend API được hỗ trợ. Tắt mặc định cho đến khi kiểm thử parser và scope.
-9. Hiển thị diff/phạm vi → validate → reload → health check. Chỉ kiểm thử lượng request có giới hạn trên VPS thử nghiệm thuộc quyền người dùng, không tạo tải tấn công trên production.
+9. Hiển thị diff/phạm vi → kiểm tra cú pháp → restart → xác nhận service active → health check. Chỉ kiểm thử lượng request có giới hạn trên VPS thử nghiệm thuộc quyền người dùng, không tạo tải tấn công trên production.
 
 Quản lý ban tự động phải lưu rule ID, owner, site/zone, thời điểm hết hạn; xử lý trùng, retry có giới hạn và rate limit API. Nếu API chỉ có scope rộng hơn một hostname phải báo và xin xác nhận, không tự gọi đó là ban riêng domain. Gỡ đúng rule KwVPS tạo, không xóa rule thủ công có sẵn. Nếu API không có TTL native phải có tác vụ gỡ ban và đối soát sau restart; lỗi gỡ phải báo.
 
@@ -563,7 +565,7 @@ Tắt antiDDoS của một site chỉ gỡ rate-limit/jail/rules do cấu hình 
 
 ### 19.3. Under Attack
 
-Nếu chưa có API token, vào **Công cụ nâng cao → Bảo mật/Cloudflare → Cấu hình API token → Thêm/thay token theo site**. Chọn site theo số rồi dán token vào ô nhập ẩn. KwVPS xác minh token còn active, dùng chính token đó tìm Zone ID qua API (`Zone Read`), kiểm tra site thuộc zone và chỉ sau đó lưu token cùng Zone ID root-only cho site. Không cần nhập Zone ID khi thêm token hoặc nhập lại token mỗi lần bật/tắt. Mỗi site có thể dùng token thuộc tài khoản Cloudflare khác nhau; token chung/theo zone kiểu cũ không được tự dùng lại, cần cấu hình lại cho từng site. Nếu thiếu token, menu sẽ chỉ đúng mục này.
+Nếu chưa có API token, vào **Công cụ nâng cao → Bảo mật/Cloudflare → Cấu hình API token → Thêm/thay token theo site**. Chọn site theo số rồi dán token; ký tự sẽ hiện trong terminal khi nhập để bạn kiểm tra, nhưng KwVPS không in lại token sau đó. Chỉ nhập khi màn hình PuTTY không bị chia sẻ hoặc ghi hình. KwVPS xác minh token còn active, dùng chính token đó tìm Zone ID qua API (`Zone Read`), kiểm tra site thuộc zone và chỉ sau đó lưu token cùng Zone ID root-only cho site. Không cần nhập Zone ID khi thêm token hoặc nhập lại token mỗi lần bật/tắt. Mỗi site có thể dùng token thuộc tài khoản Cloudflare khác nhau; token chung/theo zone kiểu cũ không được tự dùng lại, cần cấu hình lại cho từng site. Nếu thiếu token, menu sẽ chỉ đúng mục này.
 
 Bật/tắt Under Attack cần token Cloudflare với `Zone Read`, `Zone Settings Read` và `Zone Settings Edit` cho đúng zone. Không gửi token trong chat hoặc ghi vào repository. Chọn site bằng số; KwVPS dùng Zone ID đã lưu cho site, hoặc tự tìm bằng token site nếu chưa lưu. Mỗi lần vẫn xác minh domain/zone và đọc mức bảo vệ hiện tại; có lựa chọn đổi ID đã lưu. Under Attack tác động **toàn zone**, không chỉ site được chọn. Khi bật, KwVPS lưu mức cũ trong thư mục root-only; khi tắt chỉ khôi phục mức do chính KwVPS đã lưu. Nếu mức bị đổi ngoài KwVPS, menu từ chối ghi đè. Chu trình bật/tắt với cách lưu token theo site mới chưa được kiểm chứng trên VPS thật.
 
@@ -578,7 +580,7 @@ Lưu giá trị trước khi bật. Khi tắt, khôi phục giá trị trước 
 - CIDR Cloudflare phải lấy hiện hành, không hardcode danh sách cũ trong bài.
 - Không áp thông tin giá/gói/cache/API năm 2021 như thông tin hiện tại.
 - Không cài CSF song song UFW, không copy regex, tham số testing hoặc Global API Key vào hệ thống mới.
-- Không restart Nginx khi reload hợp lệ đã đủ.
+- Không restart Nginx nếu không có thay đổi cấu hình; khi có thay đổi, kiểm tra cú pháp trước, restart và xác nhận service active.
 - Ngưỡng rate trong bài chỉ minh họa, phần mô tả và ví dụ còn có chỗ khác nhau; không chọn làm mặc định production.
 - Các mẫu location/backend phải viết theo stack thực tế và kiểm thử, không sao chép nguyên file cấu hình ví dụ.
 
@@ -593,7 +595,7 @@ Một chức năng chỉ có một nơi thực thi logic. Các menu khác gọi 
 | Danh sách/mã site, domain, document root | Sites | Tất cả menu theo domain |
 | PHP version, pool, socket | PHP | Thêm/đổi/clone site, restore, cron |
 | Certificate, ACME account, renewal | SSL | Sites, restore, Tunnel |
-| Vhost/baseline, validate/reload | Nginx | SSL, PHP, cache, Real IP, antiDDoS, restore |
+| Vhost/baseline, kiểm tra cú pháp/restart/active | Nginx | SSL, PHP, cache, Real IP, antiDDoS, restore |
 | Port/IP UFW, dependency check | Firewall | SSH, DB remote, Tunnel, bảo vệ origin |
 | Jail và ban có backend cụ thể | Fail2ban | SSH, antiDDoS, danh sách ban tổng hợp |
 | Real IP và CIDR Cloudflare | Cloudflare Real IP | AntiDDoS, log, cấu hình origin-only |
@@ -624,7 +626,7 @@ Khóa thao tác đồng thời theo tài nguyên; global Nginx/UFW có khóa chu
 
 ### 20.3. Ví dụ liên kết bắt buộc
 
-- Bật antiDDoS → kiểm tra/gọi Real IP → tạo rate-limit riêng site → tùy chọn jail/API → validate/reload Nginx một lần cho thay đổi hợp lệ.
+- Bật antiDDoS → kiểm tra/gọi Real IP → tạo rate-limit riêng site → tùy chọn jail/API → kiểm tra cú pháp và restart Nginx một lần cho thay đổi hợp lệ → xác nhận active và health check site.
 - Thêm site → gọi PHP tạo pool → Nginx tạo vhost → tùy chọn DB/SSL; lỗi không được xóa tài nguyên đã tồn tại trước đó.
 - Đổi PHP → cập nhật pool/socket → phát hiện cron CLI liên quan → thử site; không thay mọi domain.
 - Đóng 80/443 → kiểm kê mọi ingress/challenge → báo xung đột → chỉ gọi UFW khi được xác nhận.

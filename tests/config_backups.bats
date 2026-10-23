@@ -45,9 +45,23 @@ setup() {
 }
 
 @test "configuration backup names are narrowly validated" {
+  kw_config_backup_name_valid config-example.com-20261023-083015.tar.gz
+  kw_config_backup_name_valid config-example.com-20261023-083015-2.tar.gz
+  kw_config_backup_name_valid config-examplecom-20261023-083015.tar.gz
   kw_config_backup_name_valid config-123456789abc-20261021T120000Z-Ab12Cd34.tar.gz
+  ! kw_config_backup_name_valid config-a..com-20261023-083015.tar.gz
+  ! kw_config_backup_name_valid config-example.com-20261023-083015-0.tar.gz
   ! kw_config_backup_name_valid ../../etc/shadow
   ! kw_config_backup_name_valid config-123456789abc-20261021T120000Z-Ab12Cd34.tar.gz/../x
+}
+
+@test "configuration restore limits new and old backups to their owning site" {
+  kw_config_backup_matches_site config-example.com-20261023-083015.tar.gz example.com examplecom
+  kw_config_backup_matches_site config-examplecom-20261023-083015.tar.gz example.com examplecom
+  kw_config_backup_matches_site config-examplecom-20261023T083015Z-AbCd1234.tar.gz example.com examplecom
+  ! kw_config_backup_matches_site config-other.com-20261023-083015.tar.gz example.com examplecom
+  ! kw_config_backup_matches_site config-othercom-20261023-083015.tar.gz example.com examplecom
+  ! kw_config_backup_matches_site config-othercom-20261023T083015Z-AbCd1234.tar.gz example.com examplecom
 }
 
 @test "configuration backup requires exact domain confirmation" {

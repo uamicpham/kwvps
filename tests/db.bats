@@ -44,6 +44,40 @@ setup() {
   [ "$status" -eq 1 ]
 }
 
+@test "database backup names are readable while legacy names remain restorable" {
+  kw_db_backup_name_valid db-kwdb_examplecom-20261023-083015.sql.gz
+  kw_db_backup_name_valid db-kwdb_examplecom-20261023-083015-2.sql.gz
+  kw_db_backup_name_valid db-examplecom-20261021T010203Z-AbCd1234.sql.gz
+  kw_db_backup_for_site examplecom db-kwdb_examplecom-20261023-083015.sql.gz
+  kw_db_backup_for_site examplecom db-examplecom-20261021T010203Z-AbCd1234.sql.gz
+  ! kw_db_backup_for_site othercom db-kwdb_examplecom-20261023-083015.sql.gz
+  ! kw_db_backup_name_valid db-kwdb_examplecom-20261023-083015-0.sql.gz
+  ! kw_db_backup_name_valid ../../etc/shadow
+}
+
+@test "database export plan names one gzip file without a separate checksum" {
+  kw_db_ready() { return 0; }
+  kw_db_meta_lookup() { KW_DB_NAME=kwdb_examplecom; }
+  run kw_db_export_plan example.com
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'db-kwdb_examplecom-YYYYMMDD-HHMMSS.sql.gz'* ]]
+  [[ "$output" == *'không tạo file checksum riêng'* ]]
+}
+
+@test "database import accepts legacy hashed filename without automatic export" {
+  kw_db_ready() { return 0; }
+  kw_db_meta_lookup() { KW_SITE_OWNER=kwexamplecom; KW_DB_NAME=kwdb_examplecom; }
+  kw_db_backup_verify() { return 0; }
+  run kw_db_import_plan example.com db-examplecom-20261021T010203Z-AbCd1234.sql.gz
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'Không tự export DB hiện tại'* ]]
+  local function_body
+  function_body=$(declare -f kw_db_import_locked)
+  [[ "$function_body" != *'kw_db_export_locked'* ]]
+  function_body=$(declare -f kw_db_export_locked)
+  [[ "$function_body" != *'sha256sum'* ]]
+}
+
 @test "database deletion requires exact site confirmation" {
   run kw_db_drop example.com wrong.example.com
   [ "$status" -eq 2 ]

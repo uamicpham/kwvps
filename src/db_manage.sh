@@ -173,8 +173,8 @@ kw_db_custom_create_interactive() {
   kw_prompt_validated 'Tên user DB (tối đa 32 ký tự): ' \
     kw_db_user_valid 'Tên user bắt đầu bằng chữ, chỉ dùng chữ/số/_ và tối đa 32 ký tự' plain || return 0
   user=$KW_PROMPT_VALUE
-  kw_prompt_validated 'Mật khẩu DB (12–128 ký tự; không hiển thị): ' \
-    kw_db_password_valid 'Mật khẩu cần 12–128 ký tự trong tập chữ/số/_!@#%+=.-' secret || return 0
+  kw_prompt_validated 'Mật khẩu DB (12–128 ký tự; hiển thị khi nhập): ' \
+    kw_db_password_valid 'Mật khẩu cần 12–128 ký tự trong tập chữ/số/_!@#%+=.-' plain || return 0
   password=$KW_PROMPT_VALUE
   KW_PROMPT_VALUE=''
   kw_prompt_yes_no_token "Tạo DB $name và user $user@localhost cho site $domain?" "$name" || return 0
@@ -218,8 +218,8 @@ kw_db_password_change_interactive() {
   name=$KW_DB_MANAGED_CHOICE
   kw_db_select_meta "$name" || return 2
   user=$KW_DB_SELECTED_USER
-  kw_prompt_validated "Mật khẩu mới cho $user@localhost (không hiển thị): " \
-    kw_db_password_valid 'Mật khẩu cần 12–128 ký tự trong tập chữ/số/_!@#%+=.-' secret || return 0
+  kw_prompt_validated "Mật khẩu mới cho $user@localhost (hiển thị khi nhập): " \
+    kw_db_password_valid 'Mật khẩu cần 12–128 ký tự trong tập chữ/số/_!@#%+=.-' plain || return 0
   password=$KW_PROMPT_VALUE
   KW_PROMPT_VALUE=''
   kw_prompt_yes_no_token "Đổi pass user $user của DB $name (ứng dụng có thể mất kết nối)?" "$name" || return 0
@@ -228,35 +228,37 @@ kw_db_password_change_interactive() {
 }
 
 kw_db_export_named_locked() (
-  local name=$1 stamp tmp='' checksum_tmp='' final digest
+  local name=$1 stamp tmp='' final suffix=1
   kw_db_ready || return 2
   kw_db_select_meta "$name" || return 2
-  kw_has mariadb-dump && kw_has gzip && kw_has sha256sum || return 2
+  kw_has mariadb-dump && kw_has gzip || return 2
   kw_backup_dir_safe /var/backups 0022 || return 2
   if [[ ! -e $KW_BACKUP_ROOT && ! -L $KW_BACKUP_ROOT ]]; then
     install -d -m 0700 -o root -g root -- "$KW_BACKUP_ROOT" || return 1
   fi
   kw_backup_dir_safe "$KW_BACKUP_ROOT" 0077 || return 2
-  stamp=$(date -u +%Y%m%dT%H%M%SZ) || return 1
+  stamp=$(date -u +%Y%m%d-%H%M%S) || return 1
   tmp=$(mktemp "$KW_BACKUP_ROOT/.db-export.XXXXXXXX") || return 1
-  trap '[[ -z $tmp ]] || rm -f -- "$tmp"; [[ -z $checksum_tmp ]] || rm -f -- "$checksum_tmp"' EXIT
+  trap '[[ -z $tmp ]] || rm -f -- "$tmp"' EXIT
   chmod 0600 -- "$tmp" || return 1
   if ! mariadb-dump --protocol=socket -uroot --single-transaction --quick \
     --routines --events --triggers "$name" | gzip -c > "$tmp"; then return 1; fi
   [[ -s $tmp ]] && gzip -t -- "$tmp" || return 1
-  digest=$(sha256sum -- "$tmp") || return 1
-  digest=${digest%% *}
-  final="$KW_BACKUP_ROOT/db-export-${name}-${stamp}-${tmp##*.}.sql.gz"
-  [[ ! -e $final && ! -L $final ]] || return 2
-  mv -T -- "$tmp" "$final" || return 1
+  while :; do
+    final="$KW_BACKUP_ROOT/db-${name}-${stamp}"
+    ((suffix == 1)) || final="${final}-${suffix}"
+    final+='.sql.gz'
+    # Both files are on the same filesystem; ln creates the final name atomically
+    # and fails rather than overwriting an existing backup.
+    if [[ ! -e $final.sha256 && ! -L $final.sha256 ]] &&
+       ln -- "$tmp" "$final" 2>/dev/null; then break; fi
+    [[ -e $final || -L $final || -e $final.sha256 || -L $final.sha256 ]] || return 1
+    ((suffix < 1000)) || return 2
+    suffix=$((suffix + 1))
+  done
+  rm -f -- "$tmp" || return 1
   tmp=''
-  checksum_tmp=$(mktemp "$KW_BACKUP_ROOT/.db-checksum.XXXXXXXX") || return 1
-  chmod 0600 -- "$checksum_tmp" || return 1
-  printf '%s  %s\n' "$digest" "${final##*/}" > "$checksum_tmp" || return 1
-  [[ ! -e $final.sha256 && ! -L $final.sha256 ]] || return 2
-  mv -T -- "$checksum_tmp" "$final.sha256" || return 1
-  checksum_tmp=''
-  printf 'Đã export %s: %s\nSHA-256: %s\n' "$name" "$final" "$digest"
+  printf 'Đã export %s: %s\n' "$name" "$final"
 )
 
 kw_db_export_named() (
@@ -342,8 +344,6 @@ kw_db_import_uploaded_locked() (
   [[ $(stat -c %s -- "$staged") == "$bytes" ]] || return 1
   if [[ $filename == *.gz ]]; then gzip -t -- "$staged" || return 2; fi
   printf '[client]\nuser=%s\npassword="%s"\n' "$KW_DB_SELECTED_USER" "$KW_DB_SELECTED_PASSWORD" > "$options" || return 1
-  # Preserve current contents first; SQL import itself is not atomic.
-  kw_db_export_named_locked "$name" || return 1
   printf 'Đang import %s vào %s (%s bảng hiện có).\n' "$filename" "$name" "$tables"
   if [[ $filename == *.gz ]]; then
     gzip -cd -- "$staged" | mariadb --defaults-extra-file="$options" --protocol=socket "$name" || return 1
@@ -386,9 +386,10 @@ kw_db_import_uploaded_interactive() {
     "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='$name'") || return 2
   printf 'File: %s/%s\nĐích: %s\n' "$KW_DB_UPLOAD_DIR" "$filename" "$name"
   if [[ $tables =~ ^[0-9]+$ ]] && ((tables > 0)); then
-    printf 'CẢNH BÁO: database đích đã có %s bảng. Import có thể ghi đè/trộn dữ liệu; không thể rollback SQL tự động.\n' "$tables"
+    printf 'CẢNH BÁO: database đích đã có %s bảng. Import có thể ghi đè/trộn dữ liệu.\n' "$tables"
   fi
-  kw_prompt_yes_no_token "Import vào $name (tự export hiện trạng trước)?" "$name" || return 0
+  printf 'Import không tự export hiện trạng và không thể hoàn tác SQL tự động. Hãy export DB riêng trước nếu cần giữ dữ liệu.\n'
+  kw_prompt_yes_no_token "Import $filename vào $name?" "$name" || return 0
   confirm=$KW_PROMPT_VALUE
   kw_db_import_uploaded "$filename" "$name" "$confirm"
 }

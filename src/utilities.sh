@@ -135,10 +135,25 @@ kw_pma_setup_locked() (
     }
   done
   nginx -t >/dev/null 2>&1 && php-fpm8.3 -t >/dev/null 2>&1 || return 2
+  trap 'if ((committed == 0)); then
+    if ((added_nginx)); then rm -f -- "$KW_PMA_NGINX"; fi
+    if ((added_pool)); then rm -f -- "$KW_PMA_POOL"; fi
+    if ((added_security)); then rm -f -- "$KW_PMA_SECURITY"; fi
+    if ((added_pool || added_security)); then
+      php-fpm8.3 -t >/dev/null 2>&1 && systemctl restart php8.3-fpm >/dev/null 2>&1 &&
+        systemctl is-active --quiet php8.3-fpm || kw_log ERROR "Cần kiểm tra rollback PHP-FPM phpMyAdmin."
+    fi
+    if ((added_nginx)); then
+      nginx -t >/dev/null 2>&1 && systemctl restart nginx >/dev/null 2>&1 &&
+        systemctl is-active --quiet nginx || kw_log ERROR "Cần kiểm tra rollback Nginx phpMyAdmin."
+    fi
+  fi
+  [[ -z $nginx_tmp ]] || rm -f -- "$nginx_tmp"
+  [[ -z $pool_tmp ]] || rm -f -- "$pool_tmp"
+  [[ -z $security_tmp ]] || rm -f -- "$security_tmp"' EXIT
   nginx_tmp=$(mktemp /etc/nginx/conf.d/.kwvps-pma.XXXXXXXX) || return 1
   pool_tmp=$(mktemp /etc/php/8.3/fpm/pool.d/.kwvps-pma.XXXXXXXX) || return 1
   security_tmp=$(mktemp /etc/phpmyadmin/conf.d/.kwvps-pma.XXXXXXXX) || return 1
-  trap 'if ((committed == 0)); then if ((added_nginx)); then rm -f -- "$KW_PMA_NGINX"; fi; if ((added_pool)); then rm -f -- "$KW_PMA_POOL"; fi; if ((added_security)); then rm -f -- "$KW_PMA_SECURITY"; fi; nginx -t >/dev/null 2>&1 && systemctl reload nginx || true; php-fpm8.3 -t >/dev/null 2>&1 && systemctl reload php8.3-fpm || true; fi; [[ -z $nginx_tmp ]] || rm -f -- "$nginx_tmp"; [[ -z $pool_tmp ]] || rm -f -- "$pool_tmp"; [[ -z $security_tmp ]] || rm -f -- "$security_tmp"' EXIT
   kw_pma_render_nginx > "$nginx_tmp" || return 1
   kw_pma_render_pool > "$pool_tmp" || return 1
   kw_pma_render_security > "$security_tmp" || return 1
@@ -158,7 +173,8 @@ kw_pma_setup_locked() (
   # shellcheck disable=SC2034 # Read by EXIT rollback trap.
   added_nginx=1
   nginx -t >/dev/null || return 1
-  systemctl reload php8.3-fpm && systemctl reload nginx || return 1
+  systemctl restart php8.3-fpm && systemctl is-active --quiet php8.3-fpm || return 1
+  systemctl restart nginx && systemctl is-active --quiet nginx || return 1
   systemctl is-active --quiet php8.3-fpm && systemctl is-active --quiet nginx || return 1
   for ((attempt=0; attempt<10; attempt++)); do
     [[ -S /run/php/kwvps-phpmyadmin.sock ]] && break
@@ -321,8 +337,8 @@ kw_pma_admin_interactive() {
     mode=create
     verb=Tạo
   fi
-  kw_prompt_validated 'Mật khẩu admin DB (ẩn, 12–128 ký tự): ' \
-    kw_db_password_valid 'Mật khẩu cần 12–128 ký tự trong tập chữ/số/_!@#%+=.-' secret || return 0
+  kw_prompt_validated 'Mật khẩu admin DB (12–128 ký tự; hiển thị khi nhập): ' \
+    kw_db_password_valid 'Mật khẩu cần 12–128 ký tự trong tập chữ/số/_!@#%+=.-' plain || return 0
   password=$KW_PROMPT_VALUE
   KW_PROMPT_VALUE=''
   kw_prompt_yes_no_token "$verb tài khoản kwvps_admin có quyền mọi DB?" PMA-ADMIN || return 0

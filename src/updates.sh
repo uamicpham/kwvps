@@ -23,6 +23,42 @@ kw_update_php_candidates_safe() {
   done
 }
 
+# APT maintainer scripts decide whether a package upgrade restarts a unit.
+# Remember managed units that were running before APT and verify that they
+# remain healthy afterwards, without forcing a second restart on a live VPS.
+kw_update_active_units() {
+  local unit
+  kw_has systemctl || return 2
+  KW_UPDATE_ACTIVE_UNITS=()
+  for unit in nginx php8.5-fpm php8.4-fpm php8.3-fpm php7.4-fpm mariadb redis-server fail2ban cloudflared cron ssh; do
+    if systemctl is-active --quiet "$unit"; then
+      KW_UPDATE_ACTIVE_UNITS+=("$unit")
+    fi
+  done
+}
+
+kw_update_service_postflight() {
+  local unit version
+  nginx -t >/dev/null 2>&1 || {
+    kw_log ERROR 'Nginx không đạt kiểm tra cấu hình sau cập nhật; cần xử lý ngay.'
+    return 1
+  }
+  for unit in "${KW_UPDATE_ACTIVE_UNITS[@]}"; do
+    if [[ $unit == php*-fpm ]]; then
+      version=${unit#php}; version=${version%-fpm}
+      if ! kw_has "php-fpm${version}" || ! "php-fpm${version}" -t >/dev/null 2>&1; then
+        kw_log ERROR "Cấu hình $unit không đạt sau cập nhật; cần xử lý ngay."
+        return 1
+      fi
+    fi
+    if ! systemctl is-active --quiet "$unit"; then
+      kw_log ERROR "$unit đã chạy trước cập nhật nhưng không active sau APT; cần xử lý ngay."
+      return 1
+    fi
+  done
+  printf 'Đã kiểm tra cấu hình Nginx và trạng thái các dịch vụ trước đó đang chạy.\n'
+}
+
 kw_update_service_candidates() {
   local data line package candidate
   KW_UPDATE_PACKAGES=()
@@ -85,9 +121,10 @@ kw_update_service_apply() (
   kw_update_service_candidates || return 2
   ((${#KW_UPDATE_PACKAGES[@]})) || { printf 'Không có package dịch vụ cần cập nhật.\n'; return 0; }
   kw_update_service_simulate >/dev/null || return 2
+  kw_update_active_units || return 2
   printf 'Đang cập nhật đúng package: %s\n' "${KW_UPDATE_PACKAGES[*]}"
   DEBIAN_FRONTEND=noninteractive apt-get install -y --only-upgrade --no-install-recommends --no-remove -- "${KW_UPDATE_PACKAGES[@]}" || return 1
-  nginx -t >/dev/null 2>&1 || { kw_log ERROR 'Nginx không đạt sau cập nhật; cần xử lý ngay.'; return 1; }
+  kw_update_service_postflight || return 1
   printf 'Đã cập nhật package. Kiểm tra từng service và website; apt không tự rollback.\n'
 )
 
@@ -135,9 +172,10 @@ kw_update_ubuntu_apply() (
   plan=$(LC_ALL=C apt-get -s --no-remove upgrade 2>&1) || return 2
   [[ $plan != *$'\nRemv '* && $plan != Remv\ * && $plan != *$'\nPurg '* && $plan != Purg\ * ]] || return 2
   [[ $plan == *$'\nInst '* || $plan == Inst\ * ]] || { printf 'Không có package cần nâng.\n'; return 0; }
+  kw_update_active_units || return 2
   DEBIAN_FRONTEND=noninteractive apt-get -y --no-remove \
     -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold upgrade || return 1
-  nginx -t >/dev/null 2>&1 || { kw_log ERROR 'Nginx không đạt sau cập nhật.'; return 1; }
+  kw_update_service_postflight || return 1
   printf 'Đã cập nhật package Ubuntu 24.04. Kiểm tra website/dịch vụ và reboot thủ công nếu hệ thống yêu cầu.\n'
 )
 

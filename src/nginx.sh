@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Nginx changes are limited to KwVPS-owned files and tested before reload.
+# Nginx changes are limited to KwVPS-owned files and tested before restart.
 readonly KW_NGINX_BASELINE=/etc/nginx/conf.d/kwvps-baseline.conf
 
 kw_nginx_render_baseline() {
@@ -16,6 +16,18 @@ kw_nginx_ready() {
      $(< /etc/kwvps/install-id) == kwvps-v1 ]] || return 2
   kw_has nginx && kw_has systemctl && kw_has flock || return 2
   systemctl is-active --quiet nginx || return 2
+}
+
+# Apply an already-staged Nginx configuration. Callers retain their own
+# rollback trap; this helper also rejects a restart that reports success but
+# leaves the service inactive.
+kw_nginx_test_restart() {
+  nginx -t || return 1
+  systemctl restart nginx || return 1
+  systemctl is-active --quiet nginx || {
+    kw_log ERROR 'Nginx không active sau khi restart; cần kiểm tra trạng thái và journal.'
+    return 1
+  }
 }
 
 kw_nginx_backup_file() {
@@ -40,7 +52,7 @@ kw_nginx_restore_plan() {
   kw_site_lookup "$domain" || return 2
   [[ -f $KW_SITE_VHOST && ! -L $KW_SITE_VHOST ]] || return 2
   printf 'Phục hồi vhost HTTP nguyên bản của %s tại %s.\n' "$domain" "$KW_SITE_VHOST"
-  printf 'Từ chối nếu vhost hiện có SSL. Giữ bản cũ root-only, nginx -t rồi reload; rollback nếu lỗi.\n'
+  printf 'Từ chối nếu vhost hiện có SSL. Giữ bản cũ root-only, kiểm tra rồi restart Nginx; rollback nếu lỗi.\n'
   printf 'Không sửa source, PHP, database hoặc cấu hình TLS.\n'
 }
 
@@ -63,14 +75,13 @@ kw_nginx_restore_locked() (
   kw_nginx_backup_file "$KW_SITE_VHOST" "site-$id" || return 1
   backup=$KW_NGINX_BACKUP
   temp=$(mktemp /etc/nginx/sites-available/.kwvps-restore.XXXXXXXX) || return 1
-  trap 'if ((swapped == 1 && committed == 0)); then cp -p -- "$backup" "$KW_SITE_VHOST" && nginx -t && systemctl reload nginx || kw_log ERROR "Rollback Nginx cần kiểm tra thủ công: $backup"; fi; [[ -z $temp ]] || rm -f -- "$temp"' EXIT
+  trap 'if ((swapped == 1 && committed == 0)); then cp -p -- "$backup" "$KW_SITE_VHOST" && kw_nginx_test_restart || kw_log ERROR "Rollback Nginx cần kiểm tra thủ công: $backup"; fi; [[ -z $temp ]] || rm -f -- "$temp"' EXIT
   printf '%s\n' "$expected" > "$temp" || return 1
   chmod 0644 -- "$temp" || return 1
   mv -T -- "$temp" "$KW_SITE_VHOST" || return 1
   temp=''
   swapped=1
-  nginx -t || return 1
-  systemctl reload nginx || return 1
+  kw_nginx_test_restart || return 1
   committed=1
   printf 'Đã phục hồi vhost %s; bản trước ở %s\n' "$domain" "$backup"
 )
@@ -98,7 +109,7 @@ kw_nginx_restore_interactive() {
 kw_nginx_baseline_plan() {
   printf 'Baseline Nginx toàn cục tại %s:\n' "$KW_NGINX_BASELINE"
   kw_nginx_render_baseline
-  printf 'Có thể ảnh hưởng tất cả site trên Nginx. Kiểm tra cú pháp và rollback nếu reload lỗi.\n'
+  printf 'Có thể ảnh hưởng tất cả site trên Nginx. Kiểm tra cú pháp, restart và rollback nếu lỗi.\n'
 }
 
 kw_nginx_baseline_locked() (
@@ -119,15 +130,14 @@ kw_nginx_baseline_locked() (
     backup=$KW_NGINX_BACKUP
   fi
   temp=$(mktemp /etc/nginx/conf.d/.kwvps-baseline.XXXXXXXX) || return 1
-  trap 'if ((swapped == 1 && committed == 0)); then if ((had_file)); then cp -p -- "$backup" "$KW_NGINX_BASELINE"; else rm -f -- "$KW_NGINX_BASELINE"; fi; nginx -t && systemctl reload nginx || kw_log ERROR "Rollback baseline Nginx cần kiểm tra thủ công: $backup"; fi; [[ -z $temp ]] || rm -f -- "$temp"' EXIT
+  trap 'if ((swapped == 1 && committed == 0)); then if ((had_file)); then cp -p -- "$backup" "$KW_NGINX_BASELINE"; else rm -f -- "$KW_NGINX_BASELINE"; fi; kw_nginx_test_restart || kw_log ERROR "Rollback baseline Nginx cần kiểm tra thủ công: $backup"; fi; [[ -z $temp ]] || rm -f -- "$temp"' EXIT
   kw_nginx_render_baseline > "$temp" || return 1
   chmod 0644 -- "$temp" || return 1
   mv -T -- "$temp" "$KW_NGINX_BASELINE" || return 1
   temp=''
   # shellcheck disable=SC2034 # Read by the EXIT rollback trap.
   swapped=1
-  nginx -t || return 1
-  systemctl reload nginx || return 1
+  kw_nginx_test_restart || return 1
   # shellcheck disable=SC2034 # Read by the EXIT rollback trap.
   committed=1
   printf 'Đã áp baseline Nginx toàn cục.\n'

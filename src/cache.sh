@@ -236,7 +236,7 @@ kw_cache_enable_locked() (
   nginx -t >/dev/null 2>&1 || return 2
   kw_nginx_backup_file "$KW_SITE_VHOST" "cache-$id" || return 1
   backup=$KW_NGINX_BACKUP
-  trap 'if ((committed == 0)); then if ((swapped)); then cp -p -- "$backup" "$KW_SITE_VHOST"; fi; if ((made_zone)); then rm -f -- "$KW_CACHE_ZONE"; fi; if ((made_snippet)); then rm -f -- "$KW_CACHE_SNIPPET"; fi; if ((made_map)); then rm -f -- "$KW_CACHE_MAP"; fi; nginx -t >/dev/null 2>&1 && systemctl reload nginx || kw_log ERROR "Cần phục hồi Nginx bằng $backup"; if ((made_dir)); then rmdir -- "$KW_CACHE_DIR" 2>/dev/null || true; fi; if ((made_parent)); then rmdir -- /var/cache/nginx/kwvps 2>/dev/null || true; fi; if ((made_cache_root)); then rmdir -- /var/cache/nginx 2>/dev/null || true; fi; if ((made_snipdir)); then rmdir -- /etc/nginx/kwvps-cache 2>/dev/null || true; fi; fi; [[ -z $vhost_tmp ]] || rm -f -- "$vhost_tmp"; [[ -z $zone_tmp ]] || rm -f -- "$zone_tmp"; [[ -z $snippet_tmp ]] || rm -f -- "$snippet_tmp"; [[ -z $map_tmp ]] || rm -f -- "$map_tmp"' EXIT
+  trap 'if ((committed == 0)); then if ((swapped)); then cp -p -- "$backup" "$KW_SITE_VHOST"; fi; if ((made_zone)); then rm -f -- "$KW_CACHE_ZONE"; fi; if ((made_snippet)); then rm -f -- "$KW_CACHE_SNIPPET"; fi; if ((made_map)); then rm -f -- "$KW_CACHE_MAP"; fi; if ((swapped || made_zone || made_snippet || made_map)); then kw_nginx_test_restart || kw_log ERROR "Cần phục hồi Nginx bằng $backup"; fi; if ((made_dir)); then rmdir -- "$KW_CACHE_DIR" 2>/dev/null || true; fi; if ((made_parent)); then rmdir -- /var/cache/nginx/kwvps 2>/dev/null || true; fi; if ((made_cache_root)); then rmdir -- /var/cache/nginx 2>/dev/null || true; fi; if ((made_snipdir)); then rmdir -- /etc/nginx/kwvps-cache 2>/dev/null || true; fi; fi; [[ -z $vhost_tmp ]] || rm -f -- "$vhost_tmp"; [[ -z $zone_tmp ]] || rm -f -- "$zone_tmp"; [[ -z $snippet_tmp ]] || rm -f -- "$snippet_tmp"; [[ -z $map_tmp ]] || rm -f -- "$map_tmp"' EXIT
   if [[ ! -e /var/cache/nginx && ! -L /var/cache/nginx ]]; then
     install -d -m 0755 -o root -g root /var/cache/nginx || return 1
     # shellcheck disable=SC2034 # Read by EXIT rollback trap.
@@ -292,7 +292,7 @@ kw_cache_enable_locked() (
   vhost_tmp=''
   # shellcheck disable=SC2034 # Read by EXIT rollback trap.
   swapped=1
-  nginx -t && systemctl reload nginx || return 1
+  kw_nginx_test_restart || return 1
   kw_cache_state "$domain" && [[ $KW_CACHE_STATE == on ]] || return 1
   # shellcheck disable=SC2034 # Read by EXIT rollback trap.
   committed=1
@@ -358,7 +358,7 @@ kw_cache_disable_locked() (
   kw_nginx_backup_file "$KW_SITE_VHOST" "cache-off-$id" || return 1
   backup=$KW_NGINX_BACKUP
   temp=$(mktemp /etc/nginx/sites-available/.kwvps-cache-off.XXXXXXXX) || return 1
-  trap 'if ((committed == 0)); then if ((swapped)); then cp -p -- "$backup" "$KW_SITE_VHOST"; fi; if ((removed_zone)); then kw_cache_render_zone "$id" > "$KW_CACHE_ZONE"; chmod 0644 -- "$KW_CACHE_ZONE"; fi; if ((removed_snippet)); then kw_cache_render_snippet "$id" > "$KW_CACHE_SNIPPET"; chmod 0644 -- "$KW_CACHE_SNIPPET"; fi; nginx -t >/dev/null 2>&1 && systemctl reload nginx || kw_log ERROR "Cần phục hồi Nginx bằng $backup"; fi; [[ -z $temp ]] || rm -f -- "$temp"' EXIT
+  trap 'if ((committed == 0)); then if ((swapped)); then cp -p -- "$backup" "$KW_SITE_VHOST"; fi; if ((removed_zone)); then kw_cache_render_zone "$id" > "$KW_CACHE_ZONE"; chmod 0644 -- "$KW_CACHE_ZONE"; fi; if ((removed_snippet)); then kw_cache_render_snippet "$id" > "$KW_CACHE_SNIPPET"; chmod 0644 -- "$KW_CACHE_SNIPPET"; fi; if ((swapped || removed_zone || removed_snippet)); then kw_nginx_test_restart || kw_log ERROR "Cần phục hồi Nginx bằng $backup"; fi; fi; [[ -z $temp ]] || rm -f -- "$temp"' EXIT
   kw_cache_base_vhost "$domain" "$id" "$KW_SITE_VHOST" > "$temp" || return 1
   chmod 0644 -- "$temp" || return 1
   mv -T -- "$temp" "$KW_SITE_VHOST" || return 1
@@ -371,7 +371,7 @@ kw_cache_disable_locked() (
   rm -- "$KW_CACHE_ZONE" || return 1
   # shellcheck disable=SC2034 # Read by EXIT rollback trap.
   removed_zone=1
-  nginx -t && systemctl reload nginx || return 1
+  kw_nginx_test_restart || return 1
   # Retain cache files for explicit clear; do not silently delete data.
   # shellcheck disable=SC2034 # Read by EXIT rollback trap.
   committed=1

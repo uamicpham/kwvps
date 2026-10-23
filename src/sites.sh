@@ -470,13 +470,17 @@ kw_site_rollback() {
   fi
   if ((KW_SITE_LINK_CREATED || KW_SITE_VHOST_CREATED)); then
     if ! nginx -t >/dev/null 2>&1 || \
-       ! systemctl reload nginx >/dev/null 2>&1; then
+       ! systemctl restart nginx >/dev/null 2>&1 || \
+       ! systemctl is-active --quiet nginx; then
       kw_log WARN 'Cần kiểm tra Nginx sau rollback.'
     fi
   fi
   if ((KW_SITE_POOL_CREATED)); then
-    systemctl reload "php${KW_SITE_PHP}-fpm" >/dev/null 2>&1 || \
+    if ! "php-fpm${KW_SITE_PHP}" -t >/dev/null 2>&1 || \
+       ! systemctl restart "php${KW_SITE_PHP}-fpm" >/dev/null 2>&1 || \
+       ! systemctl is-active --quiet "php${KW_SITE_PHP}-fpm"; then
       kw_log WARN 'Cần kiểm tra PHP-FPM sau rollback.'
+    fi
   fi
 }
 
@@ -512,8 +516,10 @@ kw_site_apply_locked() (
   ln -s -- "$KW_SITE_VHOST" "$KW_SITE_ENABLED" || return 1
   KW_SITE_LINK_CREATED=1
   nginx -t || return 1
-  systemctl reload "php${php}-fpm" || return 1
-  systemctl reload nginx || return 1
+  systemctl restart "php${php}-fpm" || return 1
+  systemctl is-active --quiet "php${php}-fpm" || return 1
+  systemctl restart nginx || return 1
+  systemctl is-active --quiet nginx || return 1
   curl --silent --show-error --fail --noproxy '*' --max-time 8 -H "Host: $domain" \
     'http://127.0.0.1/' >/dev/null || return 1
   # This record contains public site routing metadata only, never credentials.
@@ -918,18 +924,26 @@ kw_site_remove_rollback() {
       fi
     fi
   done
-  if ! nginx -t >/dev/null 2>&1 || ! systemctl reload nginx >/dev/null 2>&1; then
-    kw_log WARN 'Cần kiểm tra Nginx sau rollback.'
+  if ((KW_REMOVE_NGINX_CHANGED)); then
+    if ! nginx -t >/dev/null 2>&1 || ! systemctl restart nginx >/dev/null 2>&1 || \
+       ! systemctl is-active --quiet nginx; then
+      kw_log WARN 'Cần kiểm tra Nginx sau rollback.'
+    fi
   fi
-  if ! "php-fpm${KW_REMOVE_PHP}" -t >/dev/null 2>&1 || \
-     ! systemctl reload "php${KW_REMOVE_PHP}-fpm" >/dev/null 2>&1; then
-    kw_log WARN 'Cần kiểm tra PHP-FPM sau rollback.'
+  if ((KW_REMOVE_FPM_CHANGED)); then
+    if ! "php-fpm${KW_REMOVE_PHP}" -t >/dev/null 2>&1 || \
+       ! systemctl restart "php${KW_REMOVE_PHP}-fpm" >/dev/null 2>&1 || \
+       ! systemctl is-active --quiet "php${KW_REMOVE_PHP}-fpm"; then
+      kw_log WARN 'Cần kiểm tra PHP-FPM sau rollback.'
+    fi
   fi
 }
 
 kw_site_remove_apply_locked() (
   local domain=$1 mode=${2:-keep} id timestamp suffix
   local KW_REMOVE_DONE=0 KW_REMOVE_DIR='' KW_REMOVE_PHP='' KW_REMOVE_RENEWAL=''
+  # shellcheck disable=SC2034 # Rollback trap reads these mutation markers.
+  local KW_REMOVE_NGINX_CHANGED=0 KW_REMOVE_FPM_CHANGED=0
   kw_site_remove_preflight "$domain" "$mode" || return 2
   install -d -m 0700 -o root -g root -- "$KW_BACKUP_ROOT/retired" || return 1
   kw_backup_dir_safe "$KW_BACKUP_ROOT/retired" 0077 || return 2
@@ -940,8 +954,12 @@ kw_site_remove_apply_locked() (
   [[ ! -e $KW_REMOVE_DIR && ! -L $KW_REMOVE_DIR ]] || return 2
   install -d -m 0700 -o root -g root -- "$KW_REMOVE_DIR" || return 1
   trap kw_site_remove_rollback EXIT
+  # shellcheck disable=SC2034 # A move can partially mutate the service configuration.
+  KW_REMOVE_NGINX_CHANGED=1
   mv -T -- "$KW_SITE_ENABLED" "$KW_REMOVE_DIR/enabled.conf" || return 1
   mv -T -- "$KW_SITE_VHOST" "$KW_REMOVE_DIR/vhost.conf" || return 1
+  # shellcheck disable=SC2034 # A move can partially mutate the service configuration.
+  KW_REMOVE_FPM_CHANGED=1
   mv -T -- "$KW_SITE_POOL" "$KW_REMOVE_DIR/pool.conf" || return 1
   mv -T -- "$KW_SITE_META" "$KW_REMOVE_DIR/site.meta" || return 1
   mv -T -- "$KW_SITE_ROOT" "$KW_REMOVE_DIR/site-root" || return 1
@@ -950,8 +968,10 @@ kw_site_remove_apply_locked() (
   fi
   nginx -t >/dev/null || return 1
   "php-fpm${KW_REMOVE_PHP}" -t >/dev/null || return 1
-  systemctl reload "php${KW_REMOVE_PHP}-fpm" || return 1
-  systemctl reload nginx || return 1
+  systemctl restart "php${KW_REMOVE_PHP}-fpm" || return 1
+  systemctl is-active --quiet "php${KW_REMOVE_PHP}-fpm" || return 1
+  systemctl restart nginx || return 1
+  systemctl is-active --quiet nginx || return 1
   KW_REMOVE_DONE=1
   if [[ $mode == purge ]]; then
     kw_site_purge_preflight "$domain" "${KW_REMOVE_DIR##*/}" || {
@@ -1071,7 +1091,7 @@ kw_site_retired_plan() {
   printf 'Kế hoạch phục hồi site đã giữ:\n'
   printf '  Domain: %s\n  Vùng giữ: %s\n  PHP-FPM: %s\n' \
     "${domain,,}" "$KW_RETIRED_DIR" "$KW_RETIRED_PHP"
-  printf '  Trả source, metadata, pool và vhost về đường dẫn cũ; kiểm tra cấu hình rồi reload.\n'
+  printf '  Trả source, metadata, pool và vhost về đường dẫn cũ; kiểm tra cấu hình rồi khởi động lại dịch vụ.\n'
   printf '  Không khôi phục DB, SSL, log hoặc thay đổi bên ngoài KwVPS.\n'
 }
 
@@ -1094,23 +1114,35 @@ kw_site_retired_rollback() {
       fi
     fi
   done
-  if ! nginx -t >/dev/null 2>&1 || ! systemctl reload nginx >/dev/null 2>&1; then
-    kw_log WARN 'Cần kiểm tra Nginx sau rollback.'
+  if ((KW_RETIRED_NGINX_CHANGED)); then
+    if ! nginx -t >/dev/null 2>&1 || ! systemctl restart nginx >/dev/null 2>&1 || \
+       ! systemctl is-active --quiet nginx; then
+      kw_log WARN 'Cần kiểm tra Nginx sau rollback.'
+    fi
   fi
-  if ! "php-fpm${KW_RETIRED_PHP}" -t >/dev/null 2>&1 || \
-     ! systemctl reload "php${KW_RETIRED_PHP}-fpm" >/dev/null 2>&1; then
-    kw_log WARN 'Cần kiểm tra PHP-FPM sau rollback.'
+  if ((KW_RETIRED_FPM_CHANGED)); then
+    if ! "php-fpm${KW_RETIRED_PHP}" -t >/dev/null 2>&1 || \
+       ! systemctl restart "php${KW_RETIRED_PHP}-fpm" >/dev/null 2>&1 || \
+       ! systemctl is-active --quiet "php${KW_RETIRED_PHP}-fpm"; then
+      kw_log WARN 'Cần kiểm tra PHP-FPM sau rollback.'
+    fi
   fi
 }
 
 kw_site_retired_apply_locked() (
   local domain=$1 name=$2
   local KW_RETIRED_PHP='' KW_RETIRED_DIR='' KW_RETIRED_RENEWAL='' KW_RETIRED_DONE=0
+  # shellcheck disable=SC2034 # Rollback trap reads these mutation markers.
+  local KW_RETIRED_NGINX_CHANGED=0 KW_RETIRED_FPM_CHANGED=0
   kw_site_retired_preflight "$domain" "$name" || return 2
   trap kw_site_retired_rollback EXIT
   mv -T -- "$KW_RETIRED_DIR/site-root" "$KW_SITE_ROOT" || return 1
   mv -T -- "$KW_RETIRED_DIR/site.meta" "$KW_SITE_META" || return 1
+  # shellcheck disable=SC2034 # A move can partially mutate the service configuration.
+  KW_RETIRED_FPM_CHANGED=1
   mv -T -- "$KW_RETIRED_DIR/pool.conf" "$KW_SITE_POOL" || return 1
+  # shellcheck disable=SC2034 # A move can partially mutate the service configuration.
+  KW_RETIRED_NGINX_CHANGED=1
   mv -T -- "$KW_RETIRED_DIR/vhost.conf" "$KW_SITE_VHOST" || return 1
   mv -T -- "$KW_RETIRED_DIR/enabled.conf" "$KW_SITE_ENABLED" || return 1
   if [[ -n $KW_RETIRED_RENEWAL ]]; then
@@ -1118,8 +1150,10 @@ kw_site_retired_apply_locked() (
   fi
   nginx -t >/dev/null || return 1
   "php-fpm${KW_RETIRED_PHP}" -t >/dev/null || return 1
-  systemctl reload "php${KW_RETIRED_PHP}-fpm" || return 1
-  systemctl reload nginx || return 1
+  systemctl restart "php${KW_RETIRED_PHP}-fpm" || return 1
+  systemctl is-active --quiet "php${KW_RETIRED_PHP}-fpm" || return 1
+  systemctl restart nginx || return 1
+  systemctl is-active --quiet nginx || return 1
   KW_RETIRED_DONE=1
   rmdir -- "$KW_RETIRED_DIR" 2>/dev/null || \
     kw_log WARN "Vùng giữ đã phục hồi nhưng còn thư mục trống/khác: $KW_RETIRED_DIR"

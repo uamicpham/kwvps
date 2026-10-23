@@ -133,6 +133,19 @@ reject kw_db_password_valid "abc' OR 1=1 --"
 assert kw_db_upload_valid kenhgamez5.sql.gz
 reject kw_db_upload_valid ../../etc/passwd
 reject kw_db_drop_named kenhgamez5 NO
+output=$(
+  kw_db_choose_upload() { KW_DB_UPLOAD_CHOICE=existing.sql.gz; }
+  kw_db_choose_managed() { KW_DB_MANAGED_CHOICE=demo_db; }
+  mariadb() { printf '3\n'; }
+  kw_prompt_yes_no_token() { KW_PROMPT_VALUE=$2; }
+  kw_db_import_uploaded() { printf 'IMPORTED:%s:%s\n' "$1" "$2"; }
+  kw_db_import_uploaded_interactive <<< '1'
+)
+assert test "${output#*'đã có 3 bảng'}" != "$output"
+assert test "${output#*'Import không tự export hiện trạng'}" != "$output"
+assert test "${output#*'IMPORTED:existing.sql.gz:demo_db'}" != "$output"
+output=$(declare -f kw_db_import_uploaded_locked)
+assert test "${output#*kw_db_export_named_locked}" = "$output"
 reject kw_site_php_valid '8.3;id'
 reject kw_site_php_valid '../8.3'
 reject kw_site_plan 'example.com;id' 8.3
@@ -194,8 +207,22 @@ assert test "${output#*'ssl_certificate /etc/letsencrypt/live/example.com/fullch
 assert test "${output#*'return 301 https://$host$request_uri;'}" != "$output"
 reject kw_ssl_issue example.com wrong.example.com
 reject kw_backup_source example.com wrong-domain
+assert kw_backup_basename_valid 'source-example.com-20261023-083015.tar.gz'
+assert kw_backup_basename_valid 'source-example.com-20261023-083015-2.tar.gz'
 assert kw_backup_basename_valid 'source-123456789abc-20261021T102500Z-Ab12Cd34.tar.gz'
+assert kw_config_backup_name_valid 'config-example.com-20261023-083015.tar.gz'
 assert kw_config_backup_name_valid 'config-123456789abc-20261021T102500Z-Ab12Cd34.tar.gz'
+assert kw_backup_source_matches_site 'source-example.com-20261023-083015.tar.gz' example.com examplecom
+assert kw_backup_source_matches_site 'source-examplecom-20261021T102500Z-Ab12Cd34.tar.gz' example.com examplecom
+reject kw_backup_source_matches_site 'source-other.com-20261023-083015.tar.gz' example.com examplecom
+assert kw_config_backup_matches_site 'config-example.com-20261023-083015.tar.gz' example.com examplecom
+assert kw_config_backup_matches_site 'config-examplecom-20261021T102500Z-Ab12Cd34.tar.gz' example.com examplecom
+reject kw_config_backup_matches_site 'config-other.com-20261023-083015.tar.gz' example.com examplecom
+assert kw_db_backup_name_valid 'db-kwdb_examplecom-20261023-083015.sql.gz'
+assert kw_db_backup_name_valid 'db-examplecom-20261021T102500Z-Ab12Cd34.sql.gz'
+assert kw_db_backup_for_site examplecom 'db-kwdb_examplecom-20261023-083015.sql.gz'
+reject kw_db_backup_for_site othercom 'db-kwdb_examplecom-20261023-083015.sql.gz'
+reject kw_db_backup_name_valid '../../etc/shadow'
 reject kw_config_backup_name_valid '../../etc/shadow'
 assert kw_config_secret_password_valid 'sixteen-characters'
 reject kw_config_secret_password_valid short
@@ -246,7 +273,7 @@ kw_site_lookup() {
 }
 output=$(kw_backup_source_plan EXAMPLE.COM)
 assert test "${output#*'Domain: example.com'}" != "$output"
-assert test "${output#*"source-$site_id-"}" != "$output"
+assert test "${output#*'source-example.com-YYYYMMDD-HHMMSS'}" != "$output"
 assert test "${output#*'không gồm database'}" != "$output"
 output=$(
   mktemp() { command mktemp "$(pwd)/.cf-discover-test.XXXXXXXX"; }

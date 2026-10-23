@@ -39,3 +39,22 @@ setup() {
     -out "$BATS_TEST_TMPDIR/other-cert.pem" >/dev/null 2>&1
   ! kw_ssl_paid_validate paid.example.com "$BATS_TEST_TMPDIR/cert.pem" "$BATS_TEST_TMPDIR/other-key.pem"
 }
+
+@test "certificate renewal hook tests and restarts Nginx before declaring success" {
+  run kw_ssl_renew_hook_render
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'systemctl is-active --quiet nginx || exit 1'* ]]
+  [[ "$output" == *'nginx -t && systemctl restart nginx && systemctl is-active --quiet nginx'* ]]
+  [[ "$output" != *'systemctl reload nginx'* ]]
+}
+
+@test "legacy renewal hook upgrade accepts only exact old content" {
+  kw_ssl_renew_hook_legacy_render > "$BATS_TEST_TMPDIR/hook"
+  kw_ssl_renew_hook_is_legacy "$BATS_TEST_TMPDIR/hook"
+  ln -s "$BATS_TEST_TMPDIR/hook" "$BATS_TEST_TMPDIR/hook-link"
+  ! kw_ssl_renew_hook_is_legacy "$BATS_TEST_TMPDIR/hook-link"
+  printf '# local edit\n' >> "$BATS_TEST_TMPDIR/hook"
+  ! kw_ssl_renew_hook_is_legacy "$BATS_TEST_TMPDIR/hook"
+  kw_ssl_renew_hook_render > "$BATS_TEST_TMPDIR/hook"
+  ! kw_ssl_renew_hook_is_legacy "$BATS_TEST_TMPDIR/hook"
+}

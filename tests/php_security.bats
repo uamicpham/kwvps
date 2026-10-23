@@ -7,6 +7,21 @@ setup() {
   source src/menu.sh
 }
 
+@test "PHP switch loopback probe follows HTTP or HTTPS vhost without public DNS" {
+  KW_SITE_VHOST="$BATS_TEST_TMPDIR/site.conf"
+  printf 'server { listen 80; }\n' > "$KW_SITE_VHOST"
+  curl() { [[ " $* " == *' http://example.com/index.php '* ]] && printf 200; }
+  run kw_php_site_http_probe example.com
+  [ "$status" -eq 0 ]
+  [ "$output" = 200 ]
+
+  printf 'server {\n  listen 443 ssl;\n}\n' > "$KW_SITE_VHOST"
+  curl() { [[ " $* " == *' https://example.com/index.php '* ]] && printf 200; }
+  run kw_php_site_http_probe example.com
+  [ "$status" -eq 0 ]
+  [ "$output" = 200 ]
+}
+
 @test "critical October 2026 upstream PHP versions require fixed patch level" {
   kw_php_package_version_safe 8.5 8.5.12-1
   kw_php_package_version_safe 8.4 1:8.4.27-1+ubuntu24.04
@@ -217,4 +232,39 @@ setup() {
   kw_php_ioncube_digest_valid "$(printf 'a%.0s' {1..64})"
   ! kw_php_ioncube_digest_valid "$(printf 'g%.0s' {1..64})"
   ! kw_php_ioncube_digest_valid abc
+}
+
+@test "PHP-FPM apply checks syntax before restart and confirms the unit is active" {
+  MOCK_CALLS='' MOCK_FPM_FAIL=0 MOCK_RESTART_FAIL=0 MOCK_ACTIVE_FAIL=0
+  php-fpm8.3() {
+    [ "$1" = -t ] || return 2
+    MOCK_CALLS+=' syntax'
+    [ "$MOCK_FPM_FAIL" = 0 ]
+  }
+  systemctl() {
+    case "$1" in
+      restart) [ "$2" = php8.3-fpm ] || return 2
+        MOCK_CALLS+=' restart'; [ "$MOCK_RESTART_FAIL" = 0 ] ;;
+      is-active) [ "$2" = --quiet ] && [ "$3" = php8.3-fpm ] || return 2
+        MOCK_CALLS+=' active'; [ "$MOCK_ACTIVE_FAIL" = 0 ] ;;
+      *) return 2 ;;
+    esac
+  }
+  # Invalid PHP versions must not reach a command.
+  ! kw_php_restart_checked 9.9
+  [ -z "$MOCK_CALLS" ]
+  kw_php_restart_checked 8.3 >/dev/null
+  [ "$MOCK_CALLS" = ' syntax restart active' ]
+
+  MOCK_CALLS='' MOCK_FPM_FAIL=1
+  ! kw_php_restart_checked 8.3
+  [ "$MOCK_CALLS" = ' syntax' ]
+
+  MOCK_CALLS='' MOCK_FPM_FAIL=0 MOCK_RESTART_FAIL=1
+  ! kw_php_restart_checked 8.3
+  [ "$MOCK_CALLS" = ' syntax restart' ]
+
+  MOCK_CALLS='' MOCK_RESTART_FAIL=0 MOCK_ACTIVE_FAIL=1
+  ! kw_php_restart_checked 8.3
+  [ "$MOCK_CALLS" = ' syntax restart active' ]
 }

@@ -4,17 +4,42 @@
 kw_ssl_cert_path() { printf '/etc/letsencrypt/live/%s/fullchain.pem' "$1"; }
 kw_ssl_key_path() { printf '/etc/letsencrypt/live/%s/privkey.pem' "$1"; }
 
+kw_ssl_renew_hook_render() {
+  printf '%s\n' \
+    '#!/bin/sh' \
+    '# Managed by KwVPS. Restart Nginx after certificate renewal.' \
+    'systemctl is-active --quiet nginx || exit 1' \
+    'nginx -t && systemctl restart nginx && systemctl is-active --quiet nginx'
+}
+
+kw_ssl_renew_hook_legacy_render() {
+  printf '%s\n' \
+    '#!/bin/sh' \
+    '# Managed by KwVPS. Reload Nginx after certificate renewal.' \
+    'nginx -t >/dev/null 2>&1 && systemctl reload nginx'
+}
+
+kw_ssl_renew_hook_is_legacy() {
+  local path=$1
+  [[ -f $path && ! -L $path ]] &&
+    cmp -s -- "$path" <(kw_ssl_renew_hook_legacy_render)
+}
+
 kw_ssl_install_renew_hook() {
   local dir=/etc/letsencrypt/renewal-hooks/deploy path=/etc/letsencrypt/renewal-hooks/deploy/kwvps-nginx
+  local temp=''
+  ((EUID == 0)) || return 2
   [[ -d $dir && ! -L $dir && $(stat -c %u -- "$dir") == 0 ]] || return 2
   if [[ -e $path || -L $path ]]; then
     [[ -f $path && ! -L $path && $(stat -c %u -- "$path") == 0 ]] || return 2
-    grep -Fxq '# Managed by KwVPS. Reload Nginx after certificate renewal.' "$path" || return 2
-    return 0
+    cmp -s -- "$path" <(kw_ssl_renew_hook_render) && return 0
+    # Upgrade only the exact legacy hook; do not overwrite local changes.
+    kw_ssl_renew_hook_is_legacy "$path" || return 2
   fi
-  (umask 022; printf '%s\n' '#!/bin/sh' '# Managed by KwVPS. Reload Nginx after certificate renewal.' \
-    'nginx -t >/dev/null 2>&1 && systemctl reload nginx' > "$path") || return 1
-  chmod 0755 -- "$path"
+  temp=$(mktemp "$dir/.kwvps-nginx.XXXXXXXX") || return 1
+  kw_ssl_renew_hook_render > "$temp" || { rm -f -- "$temp"; return 1; }
+  chmod 0755 -- "$temp" || { rm -f -- "$temp"; return 1; }
+  mv -T -- "$temp" "$path" || { rm -f -- "$temp"; return 1; }
 }
 
 kw_ssl_render_vhost() {
@@ -145,21 +170,20 @@ kw_ssl_issue_locked() (
   kw_nginx_backup_file "$KW_SITE_VHOST" "ssl-$id" || return 1
   backup=$KW_NGINX_BACKUP
   temp=$(mktemp /etc/nginx/sites-available/.kwvps-ssl.XXXXXXXX) || return 1
-  trap 'if ((swapped == 1 && committed == 0)); then cp -p -- "$backup" "$KW_SITE_VHOST" && nginx -t && systemctl reload nginx || kw_log ERROR "Rollback Nginx cần kiểm tra thủ công: $backup"; fi; [[ -z $temp ]] || rm -f -- "$temp"' EXIT
+  trap 'if ((swapped == 1 && committed == 0)); then cp -p -- "$backup" "$KW_SITE_VHOST" && kw_nginx_test_restart || kw_log ERROR "Rollback Nginx cần kiểm tra thủ công: $backup"; fi; [[ -z $temp ]] || rm -f -- "$temp"' EXIT
   kw_ssl_render_vhost "$domain" "$id" "$provider" > "$temp" || return 1
   chmod 0644 -- "$temp" || return 1
   mv -T -- "$temp" "$KW_SITE_VHOST" || return 1
   temp=''
   # shellcheck disable=SC2034 # Read by the EXIT rollback trap.
   swapped=1
-  nginx -t || return 1
-  systemctl reload nginx || return 1
+  kw_nginx_test_restart || return 1
   curl --fail --silent --show-error --max-time 15 --resolve "$domain:443:127.0.0.1" \
     "https://$domain/" -o /dev/null || return 1
   # shellcheck disable=SC2034 # Read by the EXIT rollback trap.
   committed=1
   if ! kw_ssl_install_renew_hook; then
-    kw_log WARN 'HTTPS đã hoạt động nhưng chưa tạo được hook reload Nginx khi gia hạn. Cần xử lý thủ công.'
+    kw_log WARN 'HTTPS đã hoạt động nhưng chưa tạo được hook restart Nginx khi gia hạn. Cần xử lý thủ công.'
   fi
   printf 'HTTPS hoạt động cho %s. Vhost cũ: %s\n' "$domain" "$backup"
 )
@@ -238,7 +262,7 @@ kw_ssl_paid_locked() (
   target="/etc/kwvps/certs/$id"
   [[ ! -e $target && ! -L $target ]] || { kw_log ERROR 'Đã có vùng chứng chỉ cho site; không ghi đè.'; return 2; }
   temp=$(mktemp -d /etc/kwvps/certs/.kwvps-paid.XXXXXXXX) || return 1
-  trap 'if ((committed == 0)); then if ((swapped)); then cp -p -- "$backup" "$KW_SITE_VHOST" && nginx -t && systemctl reload nginx || { restored=0; kw_log ERROR "Cần khôi phục vhost: $backup"; }; fi; if ((installed && restored)); then rm -f -- "$target/fullchain.pem" "$target/privkey.pem"; rmdir -- "$target" || true; fi; fi; [[ -z $vhost_temp ]] || rm -f -- "$vhost_temp"; [[ -z $temp ]] || { rm -f -- "$temp/fullchain.pem" "$temp/privkey.pem"; rmdir -- "$temp" || true; }' EXIT
+  trap 'if ((committed == 0)); then if ((swapped)); then cp -p -- "$backup" "$KW_SITE_VHOST" && kw_nginx_test_restart || { restored=0; kw_log ERROR "Cần khôi phục vhost: $backup"; }; fi; if ((installed && restored)); then rm -f -- "$target/fullchain.pem" "$target/privkey.pem"; rmdir -- "$target" || true; fi; fi; [[ -z $vhost_temp ]] || rm -f -- "$vhost_temp"; [[ -z $temp ]] || { rm -f -- "$temp/fullchain.pem" "$temp/privkey.pem"; rmdir -- "$temp" || true; }' EXIT
   chmod 0700 -- "$temp" || return 1
   install -m 0644 -o root -g root -- "$cert" "$temp/fullchain.pem" || return 1
   install -m 0600 -o root -g root -- "$key" "$temp/privkey.pem" || return 1
@@ -256,8 +280,7 @@ kw_ssl_paid_locked() (
   vhost_temp=''
   # shellcheck disable=SC2034 # Read by the EXIT rollback trap.
   swapped=1
-  nginx -t || return 1
-  systemctl reload nginx || return 1
+  kw_nginx_test_restart || return 1
   curl --fail --silent --show-error --max-time 15 --resolve "$domain:443:127.0.0.1" "https://$domain/" -o /dev/null || return 1
   # shellcheck disable=SC2034 # Read by the EXIT rollback trap.
   committed=1

@@ -17,8 +17,28 @@ setup() {
   run kw_backup_source_plan ExAmPlE.com
   [ "$status" -eq 0 ]
   [[ "$output" == *'Domain: example.com'* ]]
-  [[ "$output" == *'source-123456789abc-'* ]]
+  [[ "$output" == *'source-example.com-YYYYMMDD-HHMMSS'* ]]
   [[ "$output" == *'không gồm database'* ]]
+}
+
+@test "source backup accepts readable names and old names but rejects unsafe names" {
+  kw_backup_basename_valid source-example.com-20261023-083015.tar.gz
+  kw_backup_basename_valid source-example.com-20261023-083015-2.tar.gz
+  kw_backup_basename_valid source-examplecom-20261023-083015.tar.gz
+  kw_backup_basename_valid source-123456789abc-20261021T010203Z-AbCd1234.tar.gz
+  ! kw_backup_basename_valid source-a..com-20261023-083015.tar.gz
+  ! kw_backup_basename_valid source-example.com-20261023-083015-0.tar.gz
+  ! kw_backup_basename_valid ../source-example.com-20261023-083015.tar.gz
+  ! kw_backup_basename_valid source-example.com-20261023-083015.tar.gz/../x
+}
+
+@test "source restore limits new and old backups to their owning site" {
+  kw_backup_source_matches_site source-example.com-20261023-083015.tar.gz example.com examplecom
+  kw_backup_source_matches_site source-examplecom-20261023-083015.tar.gz example.com examplecom
+  kw_backup_source_matches_site source-examplecom-20261023T083015Z-AbCd1234.tar.gz example.com examplecom
+  ! kw_backup_source_matches_site source-other.com-20261023-083015.tar.gz example.com examplecom
+  ! kw_backup_source_matches_site source-othercom-20261023-083015.tar.gz example.com examplecom
+  ! kw_backup_source_matches_site source-othercom-20261023T083015Z-AbCd1234.tar.gz example.com examplecom
 }
 
 @test "source archive includes public content and rejects symlink root" {

@@ -8,7 +8,7 @@ kw_cf_realip_plan() {
   printf '  File: %s\n' "$kw_cf_realip_target"
   printf '  Nguồn: https://www.cloudflare.com/ips-v4 và /ips-v6\n'
   printf '  Chỉ tin CF-Connecting-IP khi kết nối đến từ dải IP Cloudflare chính thức.\n'
-  printf '  Kiểm tra CIDR, nginx -t và reload; lỗi sẽ trả cấu hình cũ.\n'
+  printf '  Kiểm tra CIDR, nginx -t rồi restart Nginx; lỗi sẽ trả cấu hình cũ.\n'
   printf '  Không đóng/mở port hoặc bật AntiDDoS/Under Attack.\n'
 }
 
@@ -36,13 +36,14 @@ for line in lines:
 
 kw_cf_realip_rollback() {
   ((KW_CF_DONE == 0)) || return 0
+  ((KW_CF_REPLACED)) || return 0
   if [[ -n $KW_CF_OLD && -f $KW_CF_OLD ]]; then
     cp -a -- "$KW_CF_OLD" "$kw_cf_realip_target" || kw_log ERROR 'Không khôi phục được Real IP cũ.'
   elif ((KW_CF_REPLACED)); then
     rm -f -- "$kw_cf_realip_target" || kw_log ERROR 'Không gỡ được Real IP vừa tạo.'
   fi
   if nginx -t >/dev/null 2>&1; then
-    systemctl reload nginx >/dev/null 2>&1 ||
+    systemctl restart nginx >/dev/null 2>&1 && systemctl is-active --quiet nginx ||
       kw_log ERROR 'Cần kiểm tra Nginx sau khi hoàn tác Real IP.'
   else
     kw_log ERROR 'Cần kiểm tra Nginx sau khi hoàn tác Real IP.'
@@ -78,8 +79,15 @@ kw_cf_realip_apply() (
     printf 'real_ip_header CF-Connecting-IP;\nreal_ip_recursive on;\n'
   } > "$candidate" || return 2
   chmod 0644 -- "$candidate" || return 1
+  if [[ -e $kw_cf_realip_target ]]; then
+    [[ -f $kw_cf_realip_target && $(stat -c %u -- "$kw_cf_realip_target") == 0 ]] || return 2
+  fi
+  if [[ -f $kw_cf_realip_target ]] && cmp -s -- "$candidate" "$kw_cf_realip_target"; then
+    KW_CF_DONE=1
+    printf 'Cloudflare Real IP đã đúng cấu hình; không cần restart Nginx.\n'
+    return 0
+  fi
   if [[ -f $kw_cf_realip_target ]]; then
-    [[ $(stat -c %u -- "$kw_cf_realip_target") == 0 ]] || return 2
     kw_backup_dir_safe "$KW_BACKUP_ROOT" 0077 || return 2
     stamp=$(date -u +%Y%m%dT%H%M%SZ) || return 1
     backup="$KW_BACKUP_ROOT/cf-realip-${stamp}-${BASHPID}.conf"
@@ -92,7 +100,8 @@ kw_cf_realip_apply() (
   mv -T -- "$candidate" "$kw_cf_realip_target" || return 1
   KW_CF_REPLACED=1
   nginx -t >/dev/null 2>&1 || return 1
-  systemctl reload nginx || return 1
+  systemctl restart nginx || return 1
+  systemctl is-active --quiet nginx || return 1
   KW_CF_DONE=1
   printf 'Đã cập nhật Cloudflare Real IP; bản cấu hình cũ: %s\n' "${KW_CF_OLD:-không có}"
 )
@@ -335,7 +344,7 @@ kw_cf_site_token_save_interactive() {
   kw_site_prompt_domain || return 0
   domain=$KW_SITE_CHOICE
   printf 'KwVPS sẽ dùng token vừa nhập để tìm Zone ID của %s. Cần quyền Zone Read.\n' "$domain"
-  kw_prompt_validated 'Dán API token của site (ẩn ký tự; Enter để hủy): ' kw_cf_token_valid 'Token cần 20–256 ký tự chữ/số/._-' secret || return 0
+  kw_prompt_validated 'Dán API token của site (hiển thị khi nhập; Enter để hủy): ' kw_cf_token_valid 'Token cần 20–256 ký tự chữ/số/._-' plain || return 0
   token=$KW_PROMPT_VALUE
   KW_PROMPT_VALUE=''
   kw_prompt_yes_no_token "Xác minh rồi lưu token cho $domain?" "SAVE-CF-SITE:$domain" || return 0
@@ -642,7 +651,7 @@ kw_cf_antiddos_render() {
 }
 
 kw_cf_antiddos_apply() (
-  local domain=${1,,} rate=${2:-} confirm=${3:-} state ingress old_state='' old_conf='' temp='' committed=0
+  local domain=${1,,} rate=${2:-} confirm=${3:-} state ingress old_state='' old_conf='' temp='' committed=0 changed=0
   kw_domain_valid "$domain" && kw_cf_antiddos_rate_valid "$rate" || return 2
   [[ $confirm == "ANTIDDOS:$domain:$rate" ]] || return 2
   ((EUID == 0)) && kw_os_supported '' || return 2
@@ -702,7 +711,9 @@ kw_cf_antiddos_apply() (
     old_conf=$(mktemp /run/kwvps-antiddos-old.XXXXXXXX) || return 1
     cp -p -- "$kw_cf_antiddos_conf" "$old_conf" || return 1
   }
-  trap 'if (( ! committed )); then if [[ -n $old_state ]]; then printf "%s\n" "$old_state" > "$state"; chmod 0600 -- "$state"; else rm -f -- "$state"; fi; if [[ -n $old_conf ]]; then cp -p -- "$old_conf" "$kw_cf_antiddos_conf"; else rm -f -- "$kw_cf_antiddos_conf"; fi; nginx -t >/dev/null 2>&1 && systemctl reload nginx >/dev/null 2>&1 || kw_log ERROR "Cần kiểm tra rollback anti-DDoS Nginx."; fi; [[ -z $temp ]] || rm -f -- "$temp"; [[ -z $old_conf ]] || rm -f -- "$old_conf"' EXIT
+  trap 'if (( ! committed && changed )); then if [[ -n $old_state ]]; then printf "%s\n" "$old_state" > "$state"; chmod 0600 -- "$state"; else rm -f -- "$state"; fi; if [[ -n $old_conf ]]; then cp -p -- "$old_conf" "$kw_cf_antiddos_conf"; else rm -f -- "$kw_cf_antiddos_conf"; fi; nginx -t >/dev/null 2>&1 && systemctl restart nginx >/dev/null 2>&1 && systemctl is-active --quiet nginx || kw_log ERROR "Cần kiểm tra rollback anti-DDoS Nginx."; fi; [[ -z $temp ]] || rm -f -- "$temp"; [[ -z $old_conf ]] || rm -f -- "$old_conf"' EXIT
+  # shellcheck disable=SC2034 # Read by the EXIT rollback trap.
+  changed=1
   if [[ $rate == off ]]; then
     rm -f -- "$state" || return 1
   else
@@ -720,7 +731,8 @@ kw_cf_antiddos_apply() (
   mv -T -- "$temp" "$kw_cf_antiddos_conf" || return 1
   temp=''
   nginx -t || { kw_log ERROR 'Nginx từ chối cấu hình rate limit mới; đã hoàn tác.'; return 1; }
-  systemctl reload nginx || { kw_log ERROR 'Không reload được Nginx; đã hoàn tác.'; return 1; }
+  systemctl restart nginx || { kw_log ERROR 'Không restart được Nginx; đã hoàn tác.'; return 1; }
+  systemctl is-active --quiet nginx || { kw_log ERROR 'Nginx không active sau restart; đã hoàn tác.'; return 1; }
   # shellcheck disable=SC2034 # Read by the EXIT rollback trap.
   committed=1
   printf 'Đã đặt giới hạn local cho %s: %s request/giây (off = tắt).\n' "$domain" "$rate"

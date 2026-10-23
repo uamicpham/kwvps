@@ -49,6 +49,22 @@ setup() {
   [[ "$output" == *'Không có package nào'* ]]
 }
 
+@test "service postflight checks syntax and previously active PHP-FPM units" {
+  KW_UPDATE_ACTIVE_UNITS=(nginx php8.3-fpm)
+  kw_has() { return 0; }
+  nginx() { [[ $1 == -t ]]; }
+  function php-fpm8.3 { [[ $1 == -t ]]; }
+  systemctl() { [[ $1 == is-active && $2 == --quiet ]]; }
+  run kw_update_service_postflight
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'Đã kiểm tra cấu hình Nginx'* ]]
+
+  systemctl() { [[ $1 == is-active && $2 == --quiet && $3 == nginx ]]; }
+  run kw_update_service_postflight
+  [ "$status" -eq 1 ]
+  [[ "$output" == *'php8.3-fpm đã chạy trước cập nhật nhưng không active'* ]]
+}
+
 @test "KwVPS update menu exposes verified GitHub releases and local fallback" {
   run kw_catalog update
   [ "$status" -eq 0 ]

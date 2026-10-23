@@ -417,14 +417,14 @@ kw_php_install_interactive() {
     printf 'LƯU Ý: sẽ đổi php-common dùng chung từ %s sang %s (PPA Ondřej); có thể ảnh hưởng mọi phiên bản PHP.\n' "$current_common" "$KW_PHP_INSTALL_PPA_COMMON"
   fi
   printf 'LƯU Ý: APT có thể đổi lệnh php CLI mặc định toàn VPS; PHP-FPM của từng site vẫn độc lập.\n'
+  printf 'Sau cài sẽ kiểm tra cấu hình rồi restart PHP-FPM %s để extension mới có hiệu lực; APT không tự rollback.\n' "$version"
   printf '%s\n' "$KW_PHP_INSTALL_SIMULATION" | awk '/^(Inst|Remv|Conf) / { print }'
   kw_prompt_yes_no_token "Cài PHP $version và extension trên VPS?" "INSTALL-PHP:$version" || return 0
   DEBIAN_FRONTEND=noninteractive apt-get install -y --no-remove --no-install-recommends "${KW_PHP_INSTALL_PACKAGES[@]}" || return 1
   if ! kw_php_version_installed "$version" ||
      { [[ $version != 7.4 ]] && ! kw_php_security_ready "$version"; } ||
-     ! "php-fpm${version}" -t ||
-     ! systemctl is-active --quiet "php${version}-fpm"; then
-    kw_log ERROR "Đã chạy APT nhưng PHP $version chưa qua kiểm tra; không dùng cho site. Kiểm tra package và service."
+     ! kw_php_restart_checked "$version"; then
+    kw_log ERROR "Đã chạy APT nhưng PHP $version chưa qua kiểm tra/restart; không dùng cho site. Kiểm tra package và service (APT không tự rollback)."
     return 1
   fi
   if [[ $version == 7.4 ]]; then
@@ -448,6 +448,43 @@ kw_php_backup_file() {
   KW_PHP_BACKUP=$target
 }
 
+# Apply changed FPM configuration only after a successful syntax check. A
+# successful systemctl restart alone is not enough: confirm the unit stayed up.
+kw_php_restart_checked() {
+  local version=${1:-} unit
+  kw_php_version_supported "$version" || return 2
+  unit="php${version}-fpm"
+  if ! "php-fpm${version}" -t; then
+    kw_log ERROR "Cấu hình PHP-FPM $version không hợp lệ; chưa restart $unit."
+    return 1
+  fi
+  if ! systemctl restart "$unit"; then
+    kw_log ERROR "Không restart được $unit; cần kiểm tra dịch vụ và cấu hình."
+    return 1
+  fi
+  if ! systemctl is-active --quiet "$unit"; then
+    kw_log ERROR "$unit không active sau restart."
+    return 1
+  fi
+  printf 'Đã kiểm tra php-fpm%s -t và chạy systemctl restart %s.\n' "$version" "$unit"
+}
+
+# Probe the existing PHP front controller through loopback after a version
+# switch. Compare with its pre-change result: applications can legitimately
+# return redirects or errors that are unrelated to the PHP-FPM switch.
+kw_php_site_http_probe() {
+  local domain=${1,,} scheme=http port=80
+  kw_domain_valid "$domain" && kw_has curl || return 2
+  [[ -f $KW_SITE_VHOST && ! -L $KW_SITE_VHOST ]] || return 2
+  if grep -Eq '^[[:space:]]*listen[[:space:]]+443([[:space:]]|;)' "$KW_SITE_VHOST"; then
+    scheme=https
+    port=443
+  fi
+  curl --silent --show-error --noproxy '*' --max-time 8 \
+    --resolve "$domain:$port:127.0.0.1" --output /dev/null \
+    --write-out '%{http_code}' "$scheme://$domain/index.php"
+}
+
 kw_php_switch_plan() {
   local domain=${1,,} version=$2
   kw_php_version_supported "$version" || return 2
@@ -461,7 +498,7 @@ kw_php_switch_plan() {
 }
 
 kw_php_switch_locked() (
-  local domain=$1 version=$2 old old_pool new_pool meta backup_pool backup_meta tmp='' old_removed=0 new_added=0 meta_changed=0 committed=0 attempt
+  local domain=$1 version=$2 old old_pool new_pool meta backup_pool backup_meta tmp='' old_removed=0 new_added=0 meta_changed=0 committed=0 attempt baseline_status='' post_status=''
   ((EUID == 0)) || return 2
   kw_php_version_supported "$version" && kw_php_version_installed "$version" &&
     kw_php_site_ready "$version" || return 2
@@ -474,21 +511,22 @@ kw_php_switch_locked() (
   systemctl is-active --quiet "php${old}-fpm" || return 2
   systemctl is-active --quiet "php${version}-fpm" || return 2
   "php-fpm${old}" -t >/dev/null 2>&1 && "php-fpm${version}" -t >/dev/null 2>&1 || return 2
+  if [[ -f $KW_SITE_PUBLIC/index.php && ! -L $KW_SITE_PUBLIC/index.php ]]; then
+    baseline_status=$(kw_php_site_http_probe "$domain") || baseline_status=''
+  fi
   kw_php_backup_file "$old_pool" "pool-${KW_SITE_OWNER#kw}" || return 1
   backup_pool=$KW_PHP_BACKUP
   kw_php_backup_file "$meta" "meta-${KW_SITE_OWNER#kw}" || return 1
   backup_meta=$KW_PHP_BACKUP
-  trap 'if ((committed == 0)); then if ((meta_changed)); then install -m 0644 -o root -g root -- "$backup_meta" "$meta" || kw_log ERROR "Cần phục hồi metadata: $backup_meta"; fi; if ((new_added)); then rm -f -- "$new_pool"; systemctl reload "php${version}-fpm" || true; fi; if ((old_removed)); then install -m 0644 -o root -g root -- "$backup_pool" "$old_pool"; systemctl reload "php${old}-fpm" || kw_log ERROR "Cần phục hồi pool cũ: $backup_pool"; fi; fi; [[ -z $tmp ]] || rm -f -- "$tmp"' EXIT
+  trap 'if ((committed == 0)); then if ((meta_changed)); then install -m 0644 -o root -g root -- "$backup_meta" "$meta" || kw_log ERROR "Cần phục hồi metadata: $backup_meta"; fi; if ((new_added)); then rm -f -- "$new_pool" && kw_php_restart_checked "$version" || kw_log ERROR "Cần kiểm tra PHP-FPM $version sau rollback."; fi; if ((old_removed)); then install -m 0644 -o root -g root -- "$backup_pool" "$old_pool" && kw_php_restart_checked "$old" || kw_log ERROR "Cần phục hồi pool cũ: $backup_pool"; fi; fi; [[ -z $tmp ]] || rm -f -- "$tmp"' EXIT
   rm -f -- "$old_pool" || return 1
   # shellcheck disable=SC2034 # Read by the EXIT rollback trap.
   old_removed=1
-  "php-fpm${old}" -t >/dev/null || return 1
-  systemctl reload "php${old}-fpm" || return 1
+  kw_php_restart_checked "$old" || return 1
   install -m 0644 -o root -g root -- "$backup_pool" "$new_pool" || return 1
   # shellcheck disable=SC2034 # Read by the EXIT rollback trap.
   new_added=1
-  "php-fpm${version}" -t >/dev/null || return 1
-  systemctl reload "php${version}-fpm" || return 1
+  kw_php_restart_checked "$version" || return 1
   for ((attempt=0; attempt<5; attempt++)); do
     [[ -S $KW_SITE_SOCKET ]] && break
     sleep 1
@@ -504,6 +542,25 @@ kw_php_switch_locked() (
   meta_changed=1
   kw_site_lookup "$domain" || return 1
   [[ $KW_SITE_PHP == "$version" ]] || return 1
+  if [[ -f $KW_SITE_PUBLIC/index.php && ! -L $KW_SITE_PUBLIC/index.php ]]; then
+    post_status=$(kw_php_site_http_probe "$domain") || post_status=''
+    for ((attempt=0; attempt<2; attempt++)); do
+      [[ -z $post_status || $post_status =~ ^5[0-9][0-9]$ ]] || break
+      sleep 1
+      post_status=$(kw_php_site_http_probe "$domain") || post_status=''
+    done
+    printf 'Kiểm tra PHP qua site: trước=%s, sau=%s.\n' "${baseline_status:-không đọc được}" "${post_status:-không đọc được}"
+    if [[ $baseline_status =~ ^[23][0-9][0-9]$ ]] &&
+       { [[ -z $post_status ]] || [[ $post_status =~ ^5[0-9][0-9]$ ]]; }; then
+      kw_log ERROR 'HTTP/PHP lỗi sau khi đổi phiên bản; đang phục hồi PHP cũ.'
+      return 1
+    fi
+    if [[ -z $post_status || $post_status =~ ^5[0-9][0-9]$ ]]; then
+      kw_log WARN 'Site chưa đạt kiểm tra HTTP/PHP; xem website và log thủ công.'
+    fi
+  else
+    printf 'Không có public/index.php; đã kiểm tra PHP-FPM và socket, chưa thể thử PHP qua HTTP.\n'
+  fi
   # shellcheck disable=SC2034 # Read by the EXIT rollback trap.
   committed=1
   printf 'Đã chuyển %s sang PHP %s. Backup: %s, %s\n' "$domain" "$version" "$backup_pool" "$backup_meta"
@@ -564,7 +621,7 @@ kw_php_pool_tune_locked() (
   kw_php_backup_file "$pool" "tune-${KW_SITE_OWNER#kw}" || return 1
   backup=$KW_PHP_BACKUP
   temp=$(mktemp "/etc/php/${version}/fpm/pool.d/.kwvps-tune.XXXXXXXX") || return 1
-  trap 'if ((swapped == 1 && committed == 0)); then install -m 0644 -o root -g root -- "$backup" "$pool" && "php-fpm${version}" -t && systemctl reload "php${version}-fpm" || kw_log ERROR "Cần phục hồi pool thủ công: $backup"; fi; [[ -z $temp ]] || rm -f -- "$temp"' EXIT
+  trap 'if ((swapped == 1 && committed == 0)); then install -m 0644 -o root -g root -- "$backup" "$pool" && kw_php_restart_checked "$version" || kw_log ERROR "Cần phục hồi pool thủ công: $backup"; fi; [[ -z $temp ]] || rm -f -- "$temp"' EXIT
   awk -F= -v key="$field" -v replacement="$value" '
     { name=$1; gsub(/^[[:space:]]+|[[:space:]]+$/, "", name);
       if (name == key) print key " = " replacement; else print $0 }
@@ -574,8 +631,7 @@ kw_php_pool_tune_locked() (
   temp=''
   # shellcheck disable=SC2034 # Read by the EXIT rollback trap.
   swapped=1
-  "php-fpm${version}" -t || return 1
-  systemctl reload "php${version}-fpm" || return 1
+  kw_php_restart_checked "$version" || return 1
   # shellcheck disable=SC2034 # Read by the EXIT rollback trap.
   committed=1
   printf 'Đã đặt %s = %s cho %s. Backup: %s\n' "$field" "$value" "$domain" "$backup"
@@ -640,7 +696,7 @@ kw_php_pool_custom_locked() (
   kw_php_backup_file "$pool" "custom-${KW_SITE_OWNER#kw}" || return 1
   backup=$KW_PHP_BACKUP
   temp=$(mktemp "/etc/php/${version}/fpm/pool.d/.kwvps-custom.XXXXXXXX") || return 1
-  trap 'if ((swapped == 1 && committed == 0)); then install -m 0644 -o root -g root -- "$backup" "$pool" && "php-fpm${version}" -t && systemctl reload "php${version}-fpm" || kw_log ERROR "Cần phục hồi pool thủ công: $backup"; fi; [[ -z $temp ]] || rm -f -- "$temp"' EXIT
+  trap 'if ((swapped == 1 && committed == 0)); then install -m 0644 -o root -g root -- "$backup" "$pool" && kw_php_restart_checked "$version" || kw_log ERROR "Cần phục hồi pool thủ công: $backup"; fi; [[ -z $temp ]] || rm -f -- "$temp"' EXIT
   cp -- "$pool" "$temp" || return 1
   chmod 0644 -- "$temp" || return 1
   nano "$temp" || return 1
@@ -653,8 +709,7 @@ kw_php_pool_custom_locked() (
   temp=''
   # shellcheck disable=SC2034 # Read by the EXIT rollback trap.
   swapped=1
-  "php-fpm${version}" -t || return 1
-  systemctl reload "php${version}-fpm" || return 1
+  kw_php_restart_checked "$version" || return 1
   # shellcheck disable=SC2034 # Read by the EXIT rollback trap.
   committed=1
   printf 'Đã lưu pool %s. Backup: %s\n' "$domain" "$backup"
@@ -702,7 +757,7 @@ kw_php_ioncube_status() {
 kw_php_ioncube_digest_valid() { [[ ${1:-} =~ ^[a-fA-F0-9]{64}$ ]]; }
 
 kw_php_ioncube_enable() (
-  local version=$1 digest=${2,,} source_file target ini tmp='' installed=0
+  local version=$1 digest=${2,,} source_file target ini tmp='' installed=0 ini_added=0
   ((EUID == 0)) || return 2
   kw_php_version_supported "$version" && kw_php_ioncube_digest_valid "$digest" || return 2
   exec 9>/run/lock/kwvps-ioncube.lock || return 2
@@ -732,16 +787,16 @@ kw_php_ioncube_enable() (
   install -d -m 0755 -o root -g root /usr/local/lib/kwvps /usr/local/lib/kwvps/ioncube || return 1
   install -m 0644 -o root -g root -- "$source_file" "$target" || return 1
   installed=1
-  trap 'if ((installed)); then rm -f -- "$ini" "$target"; systemctl reload "php${version}-fpm" || true; fi; [[ -z $tmp ]] || rm -f -- "$tmp"' EXIT
+  trap 'if ((installed)); then if rm -f -- "$ini"; then rm -f -- "$target" || kw_log ERROR "Cần dọn loader ionCube thủ công: $target"; if ((ini_added)); then kw_php_restart_checked "$version" || kw_log ERROR "Cần kiểm tra PHP-FPM $version sau rollback ionCube."; fi; else kw_log ERROR "Cần dọn cấu hình ionCube thủ công: $ini"; fi; fi; [[ -z $tmp ]] || rm -f -- "$tmp"' EXIT
   [[ $(sha256sum -- "$target" | awk '{print $1}') == "$digest" ]] || return 1
   tmp=$(mktemp "/etc/php/${version}/fpm/conf.d/.kwvps-ioncube.XXXXXXXX") || return 1
   printf 'zend_extension=%s\n' "$target" > "$tmp" || return 1
   chmod 0644 -- "$tmp" || return 1
   mv -T -- "$tmp" "$ini" || return 1
   tmp=''
-  "php-fpm${version}" -t >/dev/null || return 1
-  systemctl reload "php${version}-fpm" || return 1
-  systemctl is-active --quiet "php${version}-fpm" || return 1
+  # shellcheck disable=SC2034 # Read by the EXIT rollback trap.
+  ini_added=1
+  kw_php_restart_checked "$version" || return 1
   # shellcheck disable=SC2034 # Read by the EXIT rollback trap.
   installed=0
   printf 'Đã bật ionCube cho PHP-FPM %s. SHA-256: %s\n' "$version" "$digest"
@@ -756,12 +811,13 @@ kw_php_ioncube_disable() (
   target="/usr/local/lib/kwvps/ioncube/ioncube_loader_lin_${version}.so"
   [[ -f $ini && ! -L $ini && $(stat -c %u -- "$ini") == 0 &&
      $(< "$ini") == "zend_extension=$target" ]] || return 2
+  systemctl is-active --quiet "php${version}-fpm" || return 2
   kw_php_backup_file "$ini" "ioncube-${version//./-}" || return 1
   backup=$KW_PHP_BACKUP
   rm -- "$ini" || return 1
-  if ! "php-fpm${version}" -t >/dev/null || ! systemctl reload "php${version}-fpm"; then
+  if ! kw_php_restart_checked "$version"; then
     install -m 0644 -o root -g root -- "$backup" "$ini" || return 1
-    systemctl reload "php${version}-fpm" || true
+    kw_php_restart_checked "$version" || kw_log ERROR "Cần kiểm tra PHP-FPM $version sau rollback ionCube."
     kw_log ERROR "Đã phục hồi cấu hình từ $backup."
     return 1
   fi

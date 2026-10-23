@@ -2,14 +2,22 @@
 # Source-only backups for sites owned by KwVPS. No restore/delete in this module.
 
 readonly KW_BACKUP_ROOT='/var/backups/kwvps'
+readonly KW_SOURCE_BACKUP_DOMAIN_RE='^source-([a-z0-9.-]+)-[0-9]{8}-[0-9]{6}(-[1-9][0-9]*)?\.tar\.gz$'
+readonly KW_SOURCE_BACKUP_ID_RE='^source-([a-z0-9]{1,29})-[0-9]{8}-[0-9]{6}(-[1-9][0-9]*)?\.tar\.gz$'
+readonly KW_SOURCE_BACKUP_LEGACY_RE='^source-([a-z0-9]{1,29})-[0-9]{8}T[0-9]{6}Z-[[:alnum:]]{8}\.tar\.gz$'
 
 kw_backup_source_plan() {
-  local domain=${1,,}
+  local domain=${1,,} label
   kw_site_lookup "$domain" || return 2
+  label=$domain
+  if ((${#label} > 205)); then label=${KW_SITE_OWNER#kw}; fi
   printf 'Kế hoạch sao lưu source (chưa thay đổi hệ thống):\n'
   printf '  Domain: %s\n  Source: %s\n' "$domain" "$KW_SITE_PUBLIC"
-  printf '  Nơi lưu: %s/source-%s-<thời gian>-<ngẫu nhiên>.tar.gz\n' \
-    "$KW_BACKUP_ROOT" "${KW_SITE_OWNER#kw}"
+  printf '  Nơi lưu: %s/source-%s-YYYYMMDD-HHMMSS[-N].tar.gz (UTC)\n' \
+    "$KW_BACKUP_ROOT" "$label"
+  if [[ $label != "$domain" ]]; then
+    printf '  Domain dài hơn 205 ký tự nên dùng site ID để không vượt giới hạn tên file Linux.\n'
+  fi
   printf '  Gồm thư mục public; không gồm database, SSL, cấu hình Nginx/PHP hoặc file ngoài source.\n'
   printf '  Site đang chạy có thể thay đổi trong lúc sao lưu; đây chưa phải snapshot nhất quán.\n'
 }
@@ -34,7 +42,7 @@ kw_backup_source_preflight() {
   [[ -f /etc/kwvps/install-id && ! -L /etc/kwvps/install-id ]] || return 2
   [[ $(< /etc/kwvps/install-id) == kwvps-v1 ]] || return 2
   kw_site_lookup "$domain" || return 2
-  for cmd in tar sha256sum mktemp flock install stat mv chmod date python3; do
+  for cmd in tar sha256sum mktemp flock install stat mv ln chmod date python3; do
     kw_has "$cmd" || { kw_log ERROR "Thiếu $cmd."; return 2; }
   done
   kw_backup_dir_safe /var/backups 0022 || return 2
@@ -56,7 +64,7 @@ kw_backup_archive_create() {
 }
 
 kw_backup_source_apply_locked() (
-  local domain=$1 tmp='' check_tmp='' final='' digest='' id timestamp random
+  local domain=$1 tmp='' check_tmp='' final='' digest='' id timestamp label suffix=1
   kw_backup_source_preflight "$domain" || return 2
   trap '[[ -z $tmp ]] || rm -f -- "$tmp"; [[ -z $check_tmp ]] || rm -f -- "$check_tmp"' EXIT
   if [[ ! -e $KW_BACKUP_ROOT && ! -L $KW_BACKUP_ROOT ]]; then
@@ -64,7 +72,9 @@ kw_backup_source_apply_locked() (
   fi
   kw_backup_dir_safe "$KW_BACKUP_ROOT" 0077 || return 2
   id=${KW_SITE_OWNER#kw}
-  timestamp=$(date -u +%Y%m%dT%H%M%SZ) || return 1
+  label=$domain
+  if ((${#label} > 205)); then label=$id; fi
+  timestamp=$(date -u +%Y%m%d-%H%M%S) || return 1
   tmp=$(mktemp "$KW_BACKUP_ROOT/.source-${id}.XXXXXXXX") || return 1
   chmod 0600 "$tmp" || return 1
   kw_backup_archive_create "$KW_SITE_ROOT" "$tmp" || {
@@ -74,10 +84,17 @@ kw_backup_source_apply_locked() (
   digest=$(sha256sum -- "$tmp") || return 1
   digest=${digest%% *}
   [[ $digest =~ ^[0-9a-f]{64}$ ]] || return 1
-  random=${tmp##*.}
-  final="$KW_BACKUP_ROOT/source-${id}-${timestamp}-${random}.tar.gz"
-  [[ ! -e $final && ! -L $final ]] || return 1
-  mv -- "$tmp" "$final" || return 1
+  while :; do
+    final="$KW_BACKUP_ROOT/source-${label}-${timestamp}"
+    ((suffix == 1)) || final="${final}-${suffix}"
+    final+='.tar.gz'
+    if [[ ! -e $final.sha256 && ! -L $final.sha256 ]] &&
+       ln -- "$tmp" "$final" 2>/dev/null; then break; fi
+    [[ -e $final || -L $final || -e $final.sha256 || -L $final.sha256 ]] || return 1
+    ((suffix < 1000)) || return 2
+    suffix=$((suffix + 1))
+  done
+  rm -f -- "$tmp" || return 1
   tmp=''
   check_tmp=$(mktemp "$KW_BACKUP_ROOT/.checksum-${id}.XXXXXXXX") || {
     kw_log WARN "Gói đã lưu tại $final nhưng chưa tạo được checksum file."
@@ -85,8 +102,8 @@ kw_backup_source_apply_locked() (
   }
   printf '%s  %s\n' "$digest" "${final##*/}" > "$check_tmp" || return 1
   chmod 0600 "$check_tmp" || return 1
-  [[ ! -e $final.sha256 && ! -L $final.sha256 ]] || return 1
-  mv -- "$check_tmp" "$final.sha256" || return 1
+  ln -- "$check_tmp" "$final.sha256" || return 1
+  rm -f -- "$check_tmp" || return 1
   check_tmp=''
   printf 'Đã sao lưu source: %s\nSHA-256: %s\n' "$final" "$digest"
   printf 'Không bao gồm database, SSL hoặc cấu hình web server.\n'
@@ -115,7 +132,12 @@ kw_backup_source_interactive() {
 }
 
 kw_backup_basename_valid() {
-  [[ ${1:-} =~ ^source-[a-z0-9]{1,29}-[0-9]{8}T[0-9]{6}Z-[[:alnum:]]{8}\.tar\.gz$ ]]
+  local name=${1:-} embedded
+  if [[ $name =~ $KW_SOURCE_BACKUP_DOMAIN_RE ]]; then
+    embedded=${BASH_REMATCH[1]}
+    if kw_domain_valid "$embedded"; then return 0; fi
+  fi
+  [[ $name =~ $KW_SOURCE_BACKUP_ID_RE || $name =~ $KW_SOURCE_BACKUP_LEGACY_RE ]]
 }
 
 kw_backup_site_label() {
@@ -132,8 +154,41 @@ kw_backup_site_label() {
   printf 'site %s (không còn trong registry)' "$id"
 }
 
+kw_backup_source_label() {
+  local name=$1 embedded id
+  kw_backup_basename_valid "$name" || return 2
+  if [[ $name =~ $KW_SOURCE_BACKUP_DOMAIN_RE ]]; then
+    embedded=${BASH_REMATCH[1]}
+    if kw_domain_valid "$embedded"; then printf '%s' "$embedded"; return 0; fi
+  fi
+  if [[ $name =~ $KW_SOURCE_BACKUP_ID_RE ]]; then
+    id=${BASH_REMATCH[1]}
+  elif [[ $name =~ $KW_SOURCE_BACKUP_LEGACY_RE ]]; then
+    id=${BASH_REMATCH[1]}
+  else
+    return 2
+  fi
+  kw_backup_site_label "$id"
+}
+
+kw_backup_source_matches_site() {
+  local name=$1 domain=$2 id=$3 embedded
+  kw_backup_basename_valid "$name" || return 1
+  if [[ $name =~ $KW_SOURCE_BACKUP_DOMAIN_RE ]]; then
+    embedded=${BASH_REMATCH[1]}
+    if kw_domain_valid "$embedded"; then [[ $embedded == "$domain" ]]; return; fi
+  fi
+  if [[ $name =~ $KW_SOURCE_BACKUP_ID_RE ]]; then
+    [[ ${BASH_REMATCH[1]} == "$id" ]]
+  elif [[ $name =~ $KW_SOURCE_BACKUP_LEGACY_RE ]]; then
+    [[ ${BASH_REMATCH[1]} == "$id" ]]
+  else
+    return 1
+  fi
+}
+
 kw_backup_list() {
-  local file name bytes count=0 id domain
+  local file name bytes count=0 domain
   ((EUID == 0)) || { kw_log ERROR 'Cần sudo/root để xem backup.'; return 2; }
   if [[ ! -e $KW_BACKUP_ROOT && ! -L $KW_BACKUP_ROOT ]]; then
     printf 'Chưa có backup KwVPS.\n'
@@ -146,8 +201,7 @@ kw_backup_list() {
     name=${file##*/}
     kw_backup_basename_valid "$name" || continue
     bytes=$(stat -c %s -- "$file") || return 1
-    id=${name#source-}; id=${id%%-*}
-    domain=$(kw_backup_site_label "$id") || return 2
+    domain=$(kw_backup_source_label "$name") || return 2
     count=$((count + 1))
     printf '%2d. %-72s %s bytes | %s\n' "$count" "$name" "$bytes" "$domain"
   done
@@ -187,20 +241,25 @@ kw_backup_verify_interactive() {
 }
 
 kw_backup_choose_source() {
-  local id=${1:-} file name choice count=0 backup_id domain
+  local site_domain=${1:-} site_id='' file name choice count=0 domain
   local -a names=()
   ((EUID == 0)) || return 2
+  if [[ -n $site_domain ]]; then
+    kw_domain_valid "$site_domain" || return 2
+    site_id=$(kw_site_id "$site_domain") || return 2
+  fi
   kw_backup_dir_safe "$KW_BACKUP_ROOT" 0077 || return 2
   printf 'Chọn backup source:\n'
   for file in "$KW_BACKUP_ROOT"/source-*.tar.gz; do
     [[ -f $file && ! -L $file ]] || continue
     name=${file##*/}
     kw_backup_basename_valid "$name" || continue
-    [[ -z $id || $name == source-${id}-* ]] || continue
+    if [[ -n $site_domain ]]; then
+      kw_backup_source_matches_site "$name" "$site_domain" "$site_id" || continue
+    fi
     names+=("$name")
     count=$((count + 1))
-    backup_id=${name#source-}; backup_id=${backup_id%%-*}
-    domain=$(kw_backup_site_label "$backup_id") || return 2
+    domain=$(kw_backup_source_label "$name") || return 2
     printf '%2d. %s | %s\n' "$count" "$name" "$domain"
   done
   if ((count == 0)); then printf 'Không có backup phù hợp.\n'; return 1; fi
@@ -214,7 +273,7 @@ kw_restore_source_plan() {
   local domain=${1,,} name=$2 id
   kw_site_lookup "$domain" || return 2
   id=${KW_SITE_OWNER#kw}
-  if ! kw_backup_basename_valid "$name" || [[ $name != source-${id}-* ]]; then
+  if ! kw_backup_source_matches_site "$name" "$domain" "$id"; then
     kw_log ERROR 'Backup không thuộc site đã chọn.'; return 2;
   fi
   kw_backup_verify "$name" || return 2
@@ -229,7 +288,7 @@ kw_restore_source_apply_locked() (
   local domain=$1 name=$2 stage='' old='' id suffix
   kw_backup_source_preflight "$domain" || return 2
   id=${KW_SITE_OWNER#kw}
-  if ! kw_backup_basename_valid "$name" || [[ $name != source-${id}-* ]]; then return 2; fi
+  kw_backup_source_matches_site "$name" "$domain" "$id" || return 2
   kw_backup_verify "$name" >/dev/null || return 2
   kw_has python3 && kw_has chown && kw_has id || return 2
   [[ -f $KW_ROOT/scripts/restore_source.py && ! -L $KW_ROOT/scripts/restore_source.py ]] || return 2
@@ -270,7 +329,7 @@ kw_restore_source_interactive() {
   local domain name confirm
   kw_site_prompt_domain || return 0
   domain=$KW_SITE_CHOICE
-  kw_backup_choose_source "$(kw_site_id "$domain")" || return 0
+  kw_backup_choose_source "$domain" || return 0
   name=$KW_BACKUP_CHOICE
   kw_restore_source_plan "$domain" "$name" || return 2
   kw_prompt_yes_no_token "Khôi phục source của $domain từ bản đã chọn?" "$domain" || return 0

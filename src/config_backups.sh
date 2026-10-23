@@ -2,7 +2,35 @@
 # Snapshot KwVPS-owned domain configuration, not source/DB/certificate private keys.
 
 kw_config_backup_name_valid() {
-  [[ ${1:-} =~ ^config-[a-z0-9]{1,29}-[0-9]{8}T[0-9]{6}Z-[[:alnum:]]{8}\.tar\.gz$ ]]
+  local name=${1:-} identity
+  [[ $name =~ ^config-[a-z0-9]{1,29}-[0-9]{8}T[0-9]{6}Z-[[:alnum:]]{8}\.tar\.gz$ ]] && return 0
+  [[ $name =~ ^config-([a-z0-9.-]+)-[0-9]{8}-[0-9]{6}(-[1-9][0-9]*)?\.tar\.gz$ ]] || return 1
+  identity=${BASH_REMATCH[1]}
+  kw_domain_valid "$identity" || kw_site_id_valid "$identity"
+}
+
+kw_config_backup_site_label() {
+  local name=$1 identity
+  kw_config_backup_name_valid "$name" || return 2
+  if [[ $name =~ ^config-([a-z0-9.-]+)-[0-9]{8}-[0-9]{6}(-[1-9][0-9]*)?\.tar\.gz$ ]]; then
+    identity=${BASH_REMATCH[1]}
+  else
+    identity=${name#config-}
+    identity=${identity%%-*}
+  fi
+  if kw_domain_valid "$identity"; then printf '%s' "$identity"; else kw_backup_site_label "$identity"; fi
+}
+
+kw_config_backup_matches_site() {
+  local name=$1 domain=${2,,} id=$3 identity
+  kw_config_backup_name_valid "$name" && kw_domain_valid "$domain" && kw_site_id_valid "$id" || return 1
+  if [[ $name =~ ^config-([a-z0-9.-]+)-[0-9]{8}-[0-9]{6}(-[1-9][0-9]*)?\.tar\.gz$ ]]; then
+    identity=${BASH_REMATCH[1]}
+  else
+    identity=${name#config-}
+    identity=${identity%%-*}
+  fi
+  [[ $identity == "$domain" || $identity == "$id" ]]
 }
 
 kw_config_secret_password_valid() {
@@ -63,7 +91,7 @@ kw_config_backup_preflight() {
 }
 
 kw_config_backup_locked() (
-  local domain=$1 password=${2:-} id stamp stage='' archive='' checksum='' final='' final_owned=0 digest zone='' token_path='' secret_archive='' secret_checksum='' secret_final='' secret_digest published=0
+  local domain=$1 password=${2:-} id identity stamp sequence stage='' archive='' checksum='' final='' final_owned=0 digest zone='' token_path='' secret_archive='' secret_checksum='' secret_final='' secret_digest published=0
   kw_config_backup_preflight "$domain" || return 2
   if [[ ! -e $KW_BACKUP_ROOT && ! -L $KW_BACKUP_ROOT ]]; then
     install -d -m 0700 -o root -g root -- "$KW_BACKUP_ROOT" || return 1
@@ -82,7 +110,7 @@ kw_config_backup_locked() (
   else
     [[ $? == 1 ]] || return 2
   fi
-  stamp=$(date -u +%Y%m%dT%H%M%SZ) || return 1
+  stamp=$(date -u +%Y%m%d-%H%M%S) || return 1
   stage=$(mktemp -d "$KW_BACKUP_ROOT/.config-stage.XXXXXXXX") || return 1
   trap '[[ -z $archive ]] || rm -f -- "$archive"; [[ -z $checksum ]] || rm -f -- "$checksum"; [[ -z $secret_archive ]] || rm -f -- "$secret_archive"; [[ -z $secret_checksum ]] || rm -f -- "$secret_checksum"; if ((final_owned && ! published)); then rm -f -- "$final" "$final.sha256"; if [[ -n $secret_final ]]; then rm -f -- "$secret_final" "$secret_final.sha256"; fi; fi; if [[ -n $stage ]]; then rm -f -- "$stage/site.meta" "$stage/pool.conf" "$stage/vhost.conf" "$stage/cloudflare.zone"; rmdir -- "$stage" || true; fi' EXIT
   chmod 0700 -- "$stage" || return 1
@@ -100,11 +128,19 @@ kw_config_backup_locked() (
   [[ -s $archive ]] && tar -tzf "$archive" >/dev/null || return 1
   digest=$(sha256sum -- "$archive") || return 1
   digest=${digest%% *}
-  final="$KW_BACKUP_ROOT/config-${id}-${stamp}-${archive##*.}.tar.gz"
-  [[ ! -e $final && ! -L $final && ! -e $final.sha256 && ! -L $final.sha256 ]] || return 2
+  identity=$domain
+  # Leave room for the longest sidecar: .tar.gz.cf.enc.sha256 and -999.
+  ((${#identity} <= 205)) || identity=$id
+  final="$KW_BACKUP_ROOT/config-${identity}-${stamp}.tar.gz"
+  sequence=1
+  while [[ -e $final || -L $final || -e $final.sha256 || -L $final.sha256 ||
+           -e $final.cf.enc || -L $final.cf.enc || -e $final.cf.enc.sha256 || -L $final.cf.enc.sha256 ]]; do
+    sequence=$((sequence + 1))
+    ((sequence <= 999)) || return 2
+    final="$KW_BACKUP_ROOT/config-${identity}-${stamp}-${sequence}.tar.gz"
+  done
   if [[ -n $zone ]]; then
     secret_final="$final.cf.enc"
-    [[ ! -e $secret_final && ! -L $secret_final && ! -e $secret_final.sha256 && ! -L $secret_final.sha256 ]] || return 2
   fi
   # shellcheck disable=SC2034 # Read by the EXIT cleanup trap.
   final_owned=1
@@ -170,20 +206,24 @@ kw_config_backup_interactive() {
 }
 
 kw_config_backup_choose() {
-  local id=${1:-} file name choice count=0 backup_id domain
+  local id=${1:-} file name choice count=0 domain scope_domain=''
   local -a names=()
   ((EUID == 0)) || return 2
   kw_backup_dir_safe "$KW_BACKUP_ROOT" 0077 || return 2
+  if [[ -n $id ]]; then
+    kw_site_id_valid "$id" || return 2
+    scope_domain=$(kw_backup_site_label "$id") || return 2
+    kw_domain_valid "$scope_domain" || return 2
+  fi
   printf 'Chọn backup cấu hình domain:\n'
   for file in "$KW_BACKUP_ROOT"/config-*.tar.gz; do
     [[ -f $file && ! -L $file ]] || continue
     name=${file##*/}
     kw_config_backup_name_valid "$name" || continue
-    [[ -z $id || $name == "config-${id}-"* ]] || continue
+    if [[ -n $id ]] && ! kw_config_backup_matches_site "$name" "$scope_domain" "$id"; then continue; fi
     names+=("$name")
     count=$((count + 1))
-    backup_id=${name#config-}; backup_id=${backup_id%%-*}
-    domain=$(kw_backup_site_label "$backup_id") || return 2
+    domain=$(kw_config_backup_site_label "$name") || return 2
     if [[ -f $file.cf.enc && ! -L $file.cf.enc ]]; then
       printf '%2d. %s | %s | token Cloudflare mã hóa\n' "$count" "$name" "$domain"
     else
@@ -228,7 +268,7 @@ kw_config_backup_verify_interactive() {
 }
 
 kw_config_backup_list() {
-  local file name count=0 id domain
+  local file name count=0 domain
   ((EUID == 0)) || return 2
   kw_backup_dir_safe "$KW_BACKUP_ROOT" 0077 || return 2
   printf 'Backup cấu hình domain:\n'
@@ -237,8 +277,7 @@ kw_config_backup_list() {
     name=${file##*/}
     kw_config_backup_name_valid "$name" || continue
     count=$((count + 1))
-    id=${name#config-}; id=${id%%-*}
-    domain=$(kw_backup_site_label "$id") || return 2
+    domain=$(kw_config_backup_site_label "$name") || return 2
     if [[ -f $file.cf.enc && ! -L $file.cf.enc ]]; then
       printf '%2d. %s | %s | token Cloudflare mã hóa\n' "$count" "$name" "$domain"
     else
@@ -249,15 +288,39 @@ kw_config_backup_list() {
 }
 
 kw_config_restore_locked() (
-  local domain=$1 name=$2 password=${3:-} id stage='' changed=0 committed=0 old_identity new_identity old_tls=0 new_tls=0 zone_manifest='' secret_zone='' secret_domain='' restored_token=''
+  local domain=$1 name=$2 password=${3:-} id stage='' changed=0 committed=0 pool_changed=0 vhost_changed=0 pool_applied=0 vhost_applied=0 rollback_ok=1 old_identity new_identity old_tls=0 new_tls=0 zone_manifest='' secret_zone='' secret_domain='' restored_token=''
   kw_config_backup_preflight "$domain" || return 2
   id=${KW_SITE_OWNER#kw}
-  kw_config_backup_name_valid "$name" && [[ $name == "config-${id}-"* ]] || return 2
+  kw_config_backup_matches_site "$name" "$domain" "$id" || return 2
   kw_config_backup_verify "$name" >/dev/null || return 2
   kw_has php-fpm"$KW_SITE_PHP" && kw_has nginx && kw_has curl || return 2
   stage=$(mktemp -d "$KW_BACKUP_ROOT/.config-restore.XXXXXXXX") || return 1
   chmod 0700 -- "$stage" || return 1
-  trap 'if ((changed == 1 && committed == 0)); then install -m 0644 -o root -g root -- "$stage/old.pool" "$KW_SITE_POOL"; install -m 0644 -o root -g root -- "$stage/old.vhost" "$KW_SITE_VHOST"; "php-fpm${KW_SITE_PHP}" -t && nginx -t && systemctl reload "php${KW_SITE_PHP}-fpm" && systemctl reload nginx || kw_log ERROR "Rollback cấu hình cần kiểm tra thủ công: $stage"; fi; if [[ -n $stage ]]; then rm -f -- "$stage/old.pool" "$stage/old.vhost" "$stage/new.meta" "$stage/new.pool" "$stage/new.vhost"; rmdir -- "$stage" || true; fi' EXIT
+  trap '
+    if ((changed == 1 && committed == 0)); then
+      if ((pool_applied)); then
+        if ! install -m 0644 -o root -g root -- "$stage/old.pool" "$KW_SITE_POOL" ||
+           ! "php-fpm${KW_SITE_PHP}" -t ||
+           ! systemctl restart "php${KW_SITE_PHP}-fpm" ||
+           ! systemctl is-active --quiet "php${KW_SITE_PHP}-fpm"; then
+          rollback_ok=0
+          kw_log ERROR "Rollback PHP-FPM cần kiểm tra thủ công: $stage"
+        fi
+      fi
+      if ((vhost_applied)); then
+        if ! install -m 0644 -o root -g root -- "$stage/old.vhost" "$KW_SITE_VHOST" ||
+           ! nginx -t || ! systemctl restart nginx ||
+           ! systemctl is-active --quiet nginx; then
+          rollback_ok=0
+          kw_log ERROR "Rollback Nginx cần kiểm tra thủ công: $stage"
+        fi
+      fi
+    fi
+    if [[ -n $stage ]] && ((rollback_ok)); then
+      rm -f -- "$stage/old.pool" "$stage/old.vhost" "$stage/new.meta" "$stage/new.pool" "$stage/new.vhost"
+      rmdir -- "$stage" || true
+    fi
+  ' EXIT
   install -m 0600 -o root -g root -- "$KW_SITE_POOL" "$stage/old.pool" || return 1
   install -m 0600 -o root -g root -- "$KW_SITE_VHOST" "$stage/old.vhost" || return 1
   tar -xOzf "$KW_BACKUP_ROOT/$name" site.meta > "$stage/new.meta" || return 1
@@ -294,18 +357,34 @@ kw_config_restore_locked() (
   [[ $old_tls == "$new_tls" ]] || {
     kw_log ERROR 'Không chuyển HTTP ↔ HTTPS qua restore cấu hình.'; return 2;
   }
-  if [[ -z $secret_zone ]] && cmp -s -- "$KW_SITE_POOL" "$stage/new.pool" && cmp -s -- "$KW_SITE_VHOST" "$stage/new.vhost"; then
+  cmp -s -- "$KW_SITE_POOL" "$stage/new.pool" || pool_changed=1
+  cmp -s -- "$KW_SITE_VHOST" "$stage/new.vhost" || vhost_changed=1
+  if [[ -z $secret_zone ]] && ((pool_changed == 0 && vhost_changed == 0)); then
     printf 'Cấu hình hiện tại đã khớp backup; không thay đổi.\n'; return 0
   fi
   kw_config_backup_locked "$domain" "$password" || return 1
   # shellcheck disable=SC2034 # Read by the EXIT rollback trap.
   changed=1
-  install -m 0644 -o root -g root -- "$stage/new.pool" "$KW_SITE_POOL" || return 1
-  install -m 0644 -o root -g root -- "$stage/new.vhost" "$KW_SITE_VHOST" || return 1
-  "php-fpm${KW_SITE_PHP}" -t || return 1
-  nginx -t || return 1
-  systemctl reload "php${KW_SITE_PHP}-fpm" || return 1
-  systemctl reload nginx || return 1
+  if ((pool_changed)); then
+    # shellcheck disable=SC2034 # A failed install may partially overwrite the pool.
+    pool_applied=1
+    install -m 0644 -o root -g root -- "$stage/new.pool" "$KW_SITE_POOL" || return 1
+    "php-fpm${KW_SITE_PHP}" -t || return 1
+  fi
+  if ((vhost_changed)); then
+    # shellcheck disable=SC2034 # A failed install may partially overwrite the vhost.
+    vhost_applied=1
+    install -m 0644 -o root -g root -- "$stage/new.vhost" "$KW_SITE_VHOST" || return 1
+    nginx -t || return 1
+  fi
+  if ((pool_changed)); then
+    systemctl restart "php${KW_SITE_PHP}-fpm" || return 1
+    systemctl is-active --quiet "php${KW_SITE_PHP}-fpm" || return 1
+  fi
+  if ((vhost_changed)); then
+    systemctl restart nginx || return 1
+    systemctl is-active --quiet nginx || return 1
+  fi
   if ((new_tls)); then
     curl --fail --silent --show-error --max-time 15 --resolve "$domain:443:127.0.0.1" \
       "https://$domain/" -o /dev/null || return 1
