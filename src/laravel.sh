@@ -369,9 +369,10 @@ kw_laravel_frontend_install() {
 
 kw_laravel_install_tool_locked() {
   local domain=$1 tool=$2 php
-  ((EUID == 0)) && kw_os_supported '' && [[ $(uname -m) == x86_64 ]] || {
-    kw_log ERROR 'Cần root trên Ubuntu 24.04 x86_64 để cài công cụ.'; return 2;
-  }
+  if ! { ((EUID == 0)) && kw_os_supported '' && [[ $(uname -m) == x86_64 ]]; }; then
+    kw_log ERROR 'Cần root trên Ubuntu 24.04 x86_64 để cài công cụ.'
+    return 2
+  fi
   kw_has apt-get && kw_has apt-cache && kw_has dpkg-query || return 2
   kw_site_lookup "$domain" || return 2
   php=$KW_SITE_PHP
