@@ -298,9 +298,10 @@ kw_laravel_node_install() {
     kw_log ERROR 'Node/npm đã có nhưng thiếu hoặc chưa đủ phiên bản. Không tự thay runtime đang dùng bởi website khác; kiểm tra thủ công.'
     return 2
   fi
-  kw_has curl && kw_has gpg || {
-    kw_log ERROR 'Cần cài curl và GnuPG từ danh sách công cụ trước khi thêm NodeSource.'; return 2;
-  }
+  if ! { kw_has curl && kw_has gpg; }; then
+    kw_log ERROR 'Cần cài curl và GnuPG từ danh sách công cụ trước khi thêm NodeSource.'
+    return 2
+  fi
   if [[ -e $source || -L $source || -e $key || -L $key ]]; then
     kw_laravel_nodesource_repo_check || {
       kw_log ERROR 'Nguồn NodeSource KwVPS hiện có không khớp mẫu/khóa tin cậy; không ghi đè.'; return 2;
@@ -437,9 +438,10 @@ kw_laravel_deploy_key_prepare() {
   local domain=$1 ssh_dir private public_file mode derived key_type key_blob
   local file_type='' file_blob=''
   kw_laravel_layout_ready "$domain" || return 2
-  kw_has ssh-keygen && kw_has runuser || {
-    kw_log ERROR 'Thiếu ssh-keygen/runuser để tạo Deploy Key cho site.'; return 2;
-  }
+  if ! { kw_has ssh-keygen && kw_has runuser; }; then
+    kw_log ERROR 'Thiếu ssh-keygen/runuser để tạo Deploy Key cho site.'
+    return 2
+  fi
   ssh_dir=$KW_SITE_ROOT/.ssh
   private=$ssh_dir/id_ed25519
   public_file=$private.pub
@@ -451,9 +453,10 @@ kw_laravel_deploy_key_prepare() {
     kw_log ERROR "Thư mục SSH của site không an toàn: $ssh_dir"; return 2;
   }
   mode=$(stat -c %a -- "$ssh_dir") || return 2
-  [[ $mode =~ ^[0-7]{3,4}$ ]] && (( (8#$mode & 0077) == 0 )) || {
-    kw_log ERROR "Thư mục SSH phải chỉ user site được truy cập: $ssh_dir"; return 2;
-  }
+  if ! { [[ $mode =~ ^[0-7]{3,4}$ ]] && (( (8#$mode & 0077) == 0 )); }; then
+    kw_log ERROR "Thư mục SSH phải chỉ user site được truy cập: $ssh_dir"
+    return 2
+  fi
 
   if [[ ! -e $private && ! -L $private ]]; then
     [[ ! -e $public_file && ! -L $public_file ]] || {
@@ -470,9 +473,10 @@ kw_laravel_deploy_key_prepare() {
     kw_log ERROR "Private key của site không an toàn: $private"; return 2;
   }
   mode=$(stat -c %a -- "$private") || return 2
-  [[ $mode =~ ^[0-7]{3,4}$ ]] && (( (8#$mode & 0077) == 0 )) || {
-    kw_log ERROR "Private key có quyền đọc quá rộng: $private"; return 2;
-  }
+  if ! { [[ $mode =~ ^[0-7]{3,4}$ ]] && (( (8#$mode & 0077) == 0 )); }; then
+    kw_log ERROR "Private key có quyền đọc quá rộng: $private"
+    return 2
+  fi
   derived=$(runuser -u "$KW_SITE_OWNER" -- ssh-keygen -y -P '' -f "$private" 2>/dev/null) || {
     kw_log ERROR 'Không đọc được SSH Deploy Key Ed25519 không mật khẩu của site; không thay key cũ.'
     return 2
