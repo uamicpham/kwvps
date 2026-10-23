@@ -231,3 +231,34 @@ setup() {
   [ "$status" -eq 2 ]
   [[ "$output" == *'Xác nhận domain không khớp'* ]]
 }
+
+@test "new site ownership is applied to source and root-owned config" {
+  KW_SITE_OWNER=kwexamplecom
+  KW_SITE_ROOT="$BATS_TEST_TMPDIR/site"
+  KW_SITE_PUBLIC="$KW_SITE_ROOT/public"
+  KW_SITE_POOL="$BATS_TEST_TMPDIR/pool.conf"
+  KW_SITE_VHOST="$BATS_TEST_TMPDIR/vhost.conf"
+  KW_SITE_META="$BATS_TEST_TMPDIR/site.meta"
+  mkdir -p "$KW_SITE_PUBLIC"
+  touch "$KW_SITE_PUBLIC/index.html" "$KW_SITE_POOL" "$KW_SITE_VHOST" "$KW_SITE_META"
+  chown() { printf 'chown:%s\n' "$*" >> "$BATS_TEST_TMPDIR/events"; }
+  chmod() { printf 'chmod:%s\n' "$*" >> "$BATS_TEST_TMPDIR/events"; }
+  stat() {
+    [[ $1 == -c && $2 == '%U:%G:%a' && $3 == -- ]] || return 1
+    shift 3
+    local file
+    for file in "$@"; do
+      case "$file" in
+        "$KW_SITE_ROOT"|"$KW_SITE_PUBLIC") printf 'kwexamplecom:www-data:750\n' ;;
+        "$KW_SITE_PUBLIC/index.html") printf 'kwexamplecom:www-data:640\n' ;;
+        *) printf 'root:root:644\n' ;;
+      esac
+    done
+  }
+  run kw_site_initial_permissions
+  [ "$status" -eq 0 ]
+  grep -Fq 'chown:-- kwexamplecom:www-data' "$BATS_TEST_TMPDIR/events"
+  grep -Fq 'chown:-- root:root' "$BATS_TEST_TMPDIR/events"
+  grep -Fq 'chmod:0750 --' "$BATS_TEST_TMPDIR/events"
+  grep -Fq 'chmod:0644 --' "$BATS_TEST_TMPDIR/events"
+}

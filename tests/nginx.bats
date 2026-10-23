@@ -19,6 +19,23 @@ setup() {
   [ "$status" -eq 2 ]
   run kw_nginx_baseline wrong
   [ "$status" -eq 2 ]
+  run kw_nginx_vhost_custom example.com wrong
+  [ "$status" -eq 2 ]
+}
+
+@test "custom vhost keeps KwVPS site identity" {
+  KW_SITE_PUBLIC=/var/www/kwvps/examplecom/public
+  KW_SITE_SOCKET=/run/php/kwvps-examplecom.sock
+  file="$BATS_TEST_TMPDIR/vhost.conf"
+  printf '%s\n' '# Managed by KwVPS. Site ID: examplecom' \
+    'server {' 'server_name example.com;' \
+    'root /var/www/kwvps/examplecom/public;' \
+    'fastcgi_pass unix:/run/php/kwvps-examplecom.sock;' '}' > "$file"
+  run kw_nginx_vhost_identity "$file" example.com examplecom
+  [ "$status" -eq 0 ]
+  printf '%s\n' 'server_name other.example.com;' >> "$file"
+  run kw_nginx_vhost_identity "$file" example.com examplecom
+  [ "$status" -eq 1 ]
 }
 
 @test "Nginx apply tests config, restarts, then checks active state" {

@@ -21,6 +21,24 @@ setup() {
   [[ "$output" == *'không gồm database'* ]]
 }
 
+@test "backup directory rejects group or other access" {
+  mkdir -m 0700 "$BATS_TEST_TMPDIR/kwvps"
+  stat() {
+    if [[ $1 == -c && $2 == %u ]]; then
+      printf '0\n'
+    else
+      command stat "$@"
+    fi
+  }
+  run kw_backup_dir_safe "$BATS_TEST_TMPDIR/kwvps" 0077
+  [ "$status" -eq 0 ]
+
+  chmod 0755 "$BATS_TEST_TMPDIR/kwvps"
+  run kw_backup_dir_safe "$BATS_TEST_TMPDIR/kwvps" 0077
+  [ "$status" -eq 2 ]
+  [[ "$output" == *'Quyền thư mục sao lưu không an toàn'* ]]
+}
+
 @test "source backup accepts readable names and old names but rejects unsafe names" {
   kw_backup_basename_valid source-example.com-20261023-083015.tar.gz
   kw_backup_basename_valid source-example.com-20261023-083015-2.tar.gz

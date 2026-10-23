@@ -6,6 +6,7 @@ source src/system.sh
 source src/updates.sh
 source src/menu.sh
 source src/sites.sh
+source src/laravel.sh
 source src/php.sh
 source src/backups.sh
 source src/config_backups.sh
@@ -63,6 +64,53 @@ assert test "$output" = ubuntu
 reject kw_os_field ID <(printf 'ID_LIKE=ubuntu\n')
 output=$(bash kwvps --version)
 assert test "$output" = "KwVPS $KW_VERSION"
+output=$(kw_catalog firewall)
+assert grep -Fq 'Bật Firewall UFW|fw-enable' <<< "$output"
+assert grep -Fq 'Tắt Firewall UFW|fw-disable' <<< "$output"
+output=$(kw_catalog nginx)
+assert grep -Fq 'Sửa vhost theo domain (nano)|nginx-vhost-custom' <<< "$output"
+output=$(kw_catalog sites)
+assert grep -Fq 'Laravel theo site|@laravel' <<< "$output"
+output=$(kw_catalog laravel)
+assert grep -Fq 'Chuẩn bị thư mục Laravel|site-laravel' <<< "$output"
+assert grep -Fq 'Pull code|laravel-pull' <<< "$output"
+assert grep -Fq 'Deploy release Laravel|laravel-deploy' <<< "$output"
+assert kw_laravel_git_url_valid https://github.com/example/laravel-app.git
+assert kw_laravel_git_url_valid git@github.com:example/laravel-app.git
+reject kw_laravel_git_url_valid 'https://secret@github.com/example/laravel-app.git'
+reject kw_laravel_git_url_valid 'https://github.com/example/laravel-app.git?token=x'
+assert kw_laravel_branch_valid main
+reject kw_laravel_branch_valid ../main
+for laravel_frontend in auto none npm pnpm yarn; do assert kw_laravel_frontend_valid "$laravel_frontend"; done
+reject kw_laravel_frontend_valid 'npm;id'
+output=$(kw_laravel_render_vhost letsencrypt example.com examplecom)
+assert grep -Fq 'root /var/www/kwvps/examplecom/deploy/current/public;' <<< "$output"
+assert grep -Fq 'root /var/www/kwvps/examplecom/public;' <<< "$output"
+for laravel_kind in http zerossl paid; do
+  output=$(kw_laravel_render_vhost "$laravel_kind" example.com examplecom)
+  assert grep -Fq 'root /var/www/kwvps/examplecom/deploy/current/public;' <<< "$output"
+  assert grep -Fq 'root /var/www/kwvps/examplecom/public;' <<< "$output"
+done
+output=$(
+  temporary_vhost=$(mktemp)
+  trap 'rm -f -- "$temporary_vhost"' EXIT
+  KW_SITE_VHOST=$temporary_vhost
+  KW_SITE_ROOT=/var/www/kwvps/examplecom
+  KW_SITE_PUBLIC=$KW_SITE_ROOT/public
+  KW_SITE_SOCKET=/run/php/kwvps-examplecom.sock
+  kw_laravel_render_vhost letsencrypt example.com examplecom > "$temporary_vhost"
+  kw_laravel_vhost_kind example.com examplecom
+  kw_nginx_vhost_identity "$temporary_vhost" example.com examplecom
+  printf '%s/%s' "$KW_LARAVEL_VHOST_KIND" "$KW_LARAVEL_FIRST"
+)
+assert test "$output" = 'letsencrypt/0'
+output=$(
+  kw_site_lookup() { KW_SITE_ROOT=/var/www/kwvps/examplecom; KW_SITE_OWNER=kwexamplecom; }
+  kw_site_laravel_plan example.com
+)
+assert grep -Fq '/var/www/kwvps/examplecom/source' <<< "$output"
+assert grep -Fq '/var/www/kwvps/examplecom/deploy/releases' <<< "$output"
+reject kw_site_laravel_prepare example.com wrong.example.com
 output=$(kw_pma_render_nginx)
 assert grep -Fq 'listen 127.0.0.1:9080;' <<< "$output"
 output=$(kw_pma_render_security)
@@ -254,11 +302,35 @@ assert kw_f2b_jail_valid sshd
 reject kw_f2b_jail_valid 'sshd;id'
 assert kw_fw_port_allowed 8080
 reject kw_fw_port_allowed 3306
+assert_kw_fw_close_db_plan() { kw_fw_port_plan close 3306 tcp >/dev/null; }
+assert assert_kw_fw_close_db_plan
 reject kw_fw_port_allowed '8080;id'
 assert kw_fw_proto_valid tcp
 reject kw_fw_proto_valid 'tcp;id'
 reject kw_fw_port_change open 8080 tcp wrong
 reject kw_fw_ip_change ban 203.0.113.47 wrong
+reject kw_fw_toggle enable wrong
+output=$(
+  ufw() {
+    printf 'Status: active\n[ 1] 80/tcp DENY IN Anywhere # kwvps-port-deny-80-tcp\n'
+    printf '[ 2] 80/tcp ALLOW IN Anywhere # user-rule\n'
+  }
+  kw_fw_rule_numbers port-deny 80 tcp
+)
+assert test "$output" = 1
+assert_kw_fw_port_action_fixture() (
+  ufw() { printf 'Status: active\n[ 1] 80/tcp DENY IN Anywhere # kwvps-port-deny-80-tcp\n'; }
+  kw_fw_port_has_action 80 tcp DENY
+)
+assert assert_kw_fw_port_action_fixture
+output=$(
+  kw_has() { return 0; }
+  sshd() { printf 'port 22\nport 2222\n'; }
+  systemctl() { return 1; }
+  SSH_CONNECTION='203.0.113.5 55444 192.0.2.10 2200'
+  kw_fw_ssh_ports
+)
+assert test "$output" = $'22\n2222\n2200'
 assert kw_swap_size_valid 256
 reject kw_swap_size_valid 127
 reject kw_swap_size_valid 8193

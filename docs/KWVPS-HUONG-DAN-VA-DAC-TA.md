@@ -126,10 +126,11 @@ Ngoại lệ kỹ thuật phải nói rõ trên màn hình: khi nano đang mở,
 4. Clone site
 5. Xóa site
 6. Phân quyền site
+7. Laravel theo site (menu con)
 0. Quay lại
 ```
 
-Bản thử `0.37.0-dev`: mục 3 đổi tên miền cho site HTTP nguyên bản (không có SSL, tùy biến vhost/pool hoặc DB legacy); đổi user/home/pool/vhost/metadata và liên kết DB tự đặt tên, có backup và rollback. Không tự sửa DNS, URL trong ứng dụng, cron hoặc Tunnel. Mục 4 clone **source/code** và tạo site HTTP mới sau xác nhận `y/N`; DB, SSL, DNS, cron không được sao chép. Mục 5 hiển thị tài nguyên rồi chọn (1) xóa site và giữ vùng phục hồi hoặc (2) xóa sạch, không giữ vùng phục hồi. Cả hai yêu cầu nhập lại domain; DB và chứng chỉ không bị xóa. Khi thêm domain đang trong vùng giữ, menu đề nghị phục hồi hoặc xóa bản giữ rồi tạo site mới; thao tác xóa bản giữ yêu cầu nhập lại domain. Mục 6 đặt lại owner/group của source, giữ mode và từ chối cây có link. Menu Backup có phục hồi hoặc xóa sạch **gói site đã giữ**. Các đoạn dưới là đặc tả mục tiêu đầy đủ hơn.
+Bản thử `0.37.0-dev`: mục 3 đổi tên miền cho site HTTP nguyên bản (không có SSL, tùy biến vhost/pool hoặc DB legacy); đổi user/home/pool/vhost/metadata và liên kết DB tự đặt tên, có backup và rollback. Không tự sửa DNS, URL trong ứng dụng, cron hoặc Tunnel. Mục 4 clone **source/code** và tạo site HTTP mới sau xác nhận `y/N`; DB, SSL, DNS, cron không được sao chép. Mục 5 hiển thị tài nguyên rồi chọn (1) xóa site và giữ vùng phục hồi hoặc (2) xóa sạch, không giữ vùng phục hồi. Cả hai yêu cầu nhập lại domain; DB và chứng chỉ không bị xóa. Khi thêm domain đang trong vùng giữ, menu đề nghị phục hồi hoặc xóa bản giữ rồi tạo site mới; thao tác xóa bản giữ yêu cầu nhập lại domain. Mục 6 đặt lại owner/group của source, giữ mode và từ chối cây có link. Mục 7 là menu Laravel dùng chung từ 0.50.8. Menu Backup có phục hồi hoặc xóa sạch **gói site đã giữ**. Các đoạn dưới là đặc tả mục tiêu đầy đủ hơn.
 
 ### Danh sách site
 
@@ -164,6 +165,14 @@ Hiện riêng các lựa chọn: gỡ cấu hình, xóa source, xóa DB liên k�
 ### Phân quyền
 
 Hiện owner/group/mode dự kiến; cấp quyền ghi cho đúng thư mục ứng dụng yêu cầu. Không thay quyền đệ quy toàn máy. Bí mật ứng dụng không được public qua document root. Phân quyền phpMyAdmin thuộc menu Tiện ích, không được cuốn theo site.
+
+### Laravel theo site (từ 0.50.8; chưa thử đầu-cuối trên VPS)
+
+Chọn site theo số, xem kế hoạch rồi xác nhận `y/N`; không cần nhập tên dự án vì thư mục cha đã theo site ID. KwVPS tạo `source/` để clone Git và `deploy/releases/`, `deploy/shared/storage/` cùng các thư mục `app/public`, `app/private`, `logs`, `framework/cache/data`, `framework/sessions`, `framework/views`. Quyền thư mục thuộc user riêng của site; nhánh upload công khai có nhóm `www-data`. Nếu `source/`, `deploy/` hoặc cấu trúc cũ có tiền tố `*-source`/`*-deploy` đã tồn tại, lệnh từ chối, không ghi đè; không tự chuyển thư mục cũ.
+
+Menu con gồm: (1) chuẩn bị thư mục, (2) xem trạng thái/công cụ, (3) clone Git vào `source/`, (4) pull nhanh nhánh hiện tại, (5) sửa `deploy/shared/.env` bằng nano dưới user site, (6) tạo và kích hoạt release. Clone chấp nhận HTTPS công khai hoặc SSH `git@host`; với repo riêng tư phải cấu hình SSH deploy key và known_hosts cho **user riêng của site** trên VPS, không gửi private key vào chat. Không nhập token trong URL, không tắt xác minh host key. Pull từ chối source có sửa đổi và chỉ dùng fast-forward. Deploy đóng gói đúng commit đã pull, cần `composer.lock`; frontend có thể tự chọn theo `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, chọn công cụ cụ thể hoặc bỏ qua nếu assets đã có sẵn. Composer và script build của project chạy dưới user site, không phải root. KwVPS không dùng script deploy riêng của bất kỳ ứng dụng nào.
+
+Release dùng `deploy/shared/.env` (0600) và `deploy/shared/storage`; Nginx chuyển root sang `deploy/current/public` cho mẫu vhost HTTP, Let's Encrypt, ZeroSSL hoặc paid SSL nguyên bản. Có thể cấp SSL trước hoặc sau khi kích hoạt Laravel nếu vhost còn đúng mẫu KwVPS; HTTP-01 vẫn đọc từ `public/` cũ. Sau khi `nginx -t` và restart, KwVPS gửi một yêu cầu loopback; lỗi mạng/HTTP 5xx sẽ trả về release/vhost trước. Không tự chạy migration, seed, queue restart, cron hoặc lệnh dự án khác. Nếu Nginx tùy biến, cấu trúc Laravel khác chuẩn, repo có submodule/symlink trong `public/`, thiếu công cụ build hoặc `composer.lock`, thao tác dừng trước khi đổi website. Các release thất bại được giữ để kiểm tra, không tự xóa. Đổi tên miền chưa hỗ trợ site Laravel đang kích hoạt; menu sẽ từ chối thay vì đổi một phần. Backup source/code hiện chỉ chứa `public/`; source, release, storage, `.env` và DB cần sao lưu riêng trước khi chuyển VPS.
 
 ## 3. SSL — menu chính 2
 
@@ -261,12 +270,14 @@ Trên Ubuntu 24.04 lab, PPA có PHP 8.4.27/8.5.12 nhưng cần `php-common` mớ
 1. Phục hồi cấu hình theo domain
 2. Áp baseline global
 3. Kiểm tra cấu hình web server
+4. Sửa vhost theo domain (nano)
 0. Quay lại
 ```
 
 - **Phục hồi:** chọn site và bản backup hoặc tái tạo từ metadata/template. Giữ SSL, PHP socket, cache, rate limit và Tunnel của site; hiển thị diff và cảnh báo custom config bị thay thế.
 - **Baseline global:** bản cấu hình nền có phiên bản; hiện thay đổi và toàn bộ site bị ảnh hưởng. Không ghi đè file người dùng quản lý hoặc lặp lại include Real IP. Không tự chọn thông số “tối ưu” cực đoan cho mọi cấu hình VPS.
 - **Kiểm tra:** chạy kiểm tra cú pháp toàn bộ cấu hình, trùng hostname/listen, socket đích và chứng chỉ. Cú pháp đúng không đảm bảo website đúng; sau khi thay cấu hình cần restart, xác nhận Nginx active và thử HTTP/health check đối với site bị ảnh hưởng.
+- **Sửa vhost:** chọn site theo số; KwVPS mở bản sao tạm trong nano. Không cho đổi marker quản lý, `server_name`, document root hoặc PHP-FPM socket. Nếu có thay đổi, KwVPS lưu vhost cũ trong backup root-only, áp bản mới, chạy `nginx -t`, restart và kiểm tra Nginx active; lỗi sẽ phục hồi bản cũ. Cấu hình tùy biến có thể khiến thao tác đổi domain/SSL sau này bị từ chối; sau sửa cần thử trang web thật.
 
 Ghi cấu hình theo giao dịch: lưu trước → chuẩn bị → kiểm tra cú pháp → restart → xác nhận dịch vụ active và health check site khi phù hợp → hoàn tác cấu hình nếu lỗi. Restart có thể gây gián đoạn ngắn; nên thực hiện trong khung bảo trì với site quan trọng. Không để một menu ghi trực tiếp đè file của menu khác.
 
@@ -363,17 +374,20 @@ Swap không thay RAM thực; không tự đổi swappiness toàn hệ thống n�
 4. IP bị khóa
 5. Khóa IP
 6. Mở khóa IP
+7. Bật Firewall UFW
+8. Tắt Firewall UFW
 0. Quay lại
 ```
 
 UFW là trình quản lý firewall dự kiến duy nhất của KwVPS. Không cài CSF song song. Phát hiện firewall manager khác hoặc luật ngoài quyền quản lý thì báo trước, không reset.
 
 - **Danh sách port:** tách port đang listen, rule cho phép UFW và tình trạng truy cập từ Internet (nếu đã kiểm chứng). Một rule allow không có nghĩa có dịch vụ đang nghe; firewall nhà cung cấp là lớp riêng.
-- **Mở/khóa port:** nhập port/protocol, source IP/CIDR, IPv4/IPv6 và lý do. Xem rule chồng chéo/thứ tự ưu tiên, không xóa theo số thứ tự cũ đã thay đổi. Kiểm tra SSH, web, ACME, DB remote và Tunnel trước áp dụng.
+- **Bật UFW:** menu 7 hoặc tự động khi đã xác nhận mở/khóa port; xác minh `/etc/default/ufw` là root-owned, mặc định deny incoming và `IPV6=yes`, đọc cổng `sshd -T` và cổng phiên SSH hiện tại, đặt rule ALLOW SSH trước khi kích hoạt. Nếu không xác định được đường SSH an toàn thì từ chối bật. Bật UFW có thể chặn các dịch vụ inbound khác; cần kiểm tra danh sách ALLOW và có console cứu hộ. Menu 8 tắt UFW sau xác nhận `y/N`.
+- **Mở/khóa port:** nhập port và TCP/UDP rồi xác nhận `y/N`. Khóa thêm rule DENY ưu tiên do KwVPS sở hữu, không xóa rule ALLOW của bên khác; mở gỡ DENY KwVPS và bảo đảm có ALLOW. Không mở công khai 3306 hoặc khóa cổng SSH cấu hình/đang kết nối. Các lựa chọn source IP/CIDR và lý do riêng từng rule chưa triển khai.
 - **IP bị khóa:** hiển thị nguồn UFW/Fail2ban/Cloudflare nếu truy vấn được; chỉ danh sách UFW là dữ liệu module này sở hữu trực tiếp. Cloudflare lỗi API phải báo không xác định, không báo “không bị khóa”.
 - **Khóa/mở khóa IP:** kiểm tra allowlist và IP quản trị; gọi backend thích hợp, ghi lý do và phạm vi. Mở khóa UFW không hủy ban Fail2ban/Cloudflare.
 
-Khi bật UFW lần đầu phải giữ đường SSH thực tế và xác nhận console cứu hộ. Cổng 80/443 là tài nguyên toàn VPS, không thể đóng theo một domain bằng UFW trên cùng IP/port. Cần kiểm tra mọi site trước thay đổi.
+Cổng 80/443 là tài nguyên toàn VPS, không thể đóng theo một domain bằng UFW trên cùng IP/port. Firewall của nhà cung cấp VPS nằm ngoài KwVPS; cần kiểm tra mọi site trước thay đổi.
 
 ## 14. Disk — menu chính 13
 
@@ -497,7 +511,7 @@ Không ghi đè user/UID hoặc owner từ archive một cách mù quáng. Resto
 
 ### Port 80/443
 
-Menu **Cloudflare Tunnel → Inbound 80/443** có `1. Đóng` và `2. Mở`. Chức năng này thao tác rule ALLOW UFW cho cả IPv4/IPv6, kể cả rule đã tồn tại trước KwVPS. Nó chỉ áp dụng khi UFW active, mặc định deny incoming và Tunnel active; không thay đổi firewall của nhà cung cấp. Khi đóng, KwVPS chạy thử gia hạn Certbot (`renew --dry-run`) nếu có chứng chỉ HTTP-01 webroot. Nếu thử thất bại, KwVPS mở lại rule 80/443; luôn kiểm tra `ufw status numbered` và đường truy cập sau thao tác. Mở lại tạo rule ALLOW cho cổng còn đóng.
+Menu **Cloudflare Tunnel → Inbound 80/443** có `1. Đóng` và `2. Mở`. Nếu UFW đang tắt, KwVPS bảo vệ đường SSH và tự bật UFW sau xác nhận. Đóng yêu cầu Tunnel đang active, thêm DENY ưu tiên cho 80/443 thay vì xóa ALLOW của bên khác, rồi chạy thử gia hạn Certbot (`renew --dry-run`) nếu có chứng chỉ HTTP-01 webroot; thất bại sẽ hoàn tác DENY mới. Mở gỡ DENY do KwVPS tạo và bảo đảm ALLOW 80/443, không sửa rule DENY bên ngoài. Tác động áp dụng toàn VPS, không thay đổi firewall của nhà cung cấp. Luôn kiểm tra `ufw status numbered` và đường truy cập sau thao tác.
 
 Tunnel thiết lập kết nối đi ra nên **có thể đóng inbound 80/443** mà Tunnel vẫn hoạt động: `cloudflared` cần kết nối outbound 7844 tới Cloudflare và truy cập Nginx qua local origin. "Không tự đóng 80/443" trong menu nghĩa là KwVPS không thay firewall thay người dùng, **không phải** hai cổng phải mở công khai để Tunnel chạy. Tuy nhiên:
 

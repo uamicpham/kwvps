@@ -484,6 +484,28 @@ kw_site_rollback() {
   fi
 }
 
+# Re-apply and verify the ownership of only the files this transaction just
+# created. The shared parent and Nginx/PHP configuration must remain root-owned.
+kw_site_initial_permissions() {
+  local file
+  [[ -d $KW_SITE_ROOT && ! -L $KW_SITE_ROOT &&
+     -d $KW_SITE_PUBLIC && ! -L $KW_SITE_PUBLIC &&
+     -f $KW_SITE_PUBLIC/index.html && ! -L $KW_SITE_PUBLIC/index.html ]] || return 2
+  for file in "$KW_SITE_POOL" "$KW_SITE_VHOST" "$KW_SITE_META"; do
+    [[ -f $file && ! -L $file ]] || return 2
+  done
+  chown -- "$KW_SITE_OWNER:www-data" "$KW_SITE_ROOT" "$KW_SITE_PUBLIC" \
+    "$KW_SITE_PUBLIC/index.html" || return 1
+  chmod 0750 -- "$KW_SITE_ROOT" "$KW_SITE_PUBLIC" || return 1
+  chmod 0640 -- "$KW_SITE_PUBLIC/index.html" || return 1
+  chown -- root:root "$KW_SITE_POOL" "$KW_SITE_VHOST" "$KW_SITE_META" || return 1
+  chmod 0644 -- "$KW_SITE_POOL" "$KW_SITE_VHOST" "$KW_SITE_META" || return 1
+  [[ $(stat -c '%U:%G:%a' -- "$KW_SITE_ROOT" "$KW_SITE_PUBLIC" "$KW_SITE_PUBLIC/index.html") == \
+     "$KW_SITE_OWNER:www-data:750"$'\n'"$KW_SITE_OWNER:www-data:750"$'\n'"$KW_SITE_OWNER:www-data:640" ]] || return 1
+  [[ $(stat -c '%U:%G:%a' -- "$KW_SITE_POOL" "$KW_SITE_VHOST" "$KW_SITE_META") == \
+     $'root:root:644\nroot:root:644\nroot:root:644' ]] || return 1
+}
+
 kw_site_apply_locked() (
   local domain=$1 php=$2 id=$3
   local KW_SITE_DONE=0 KW_SITE_LINK_CREATED=0 KW_SITE_VHOST_CREATED=0
@@ -525,10 +547,14 @@ kw_site_apply_locked() (
   # This record contains public site routing metadata only, never credentials.
   install -m 0644 -o root -g root -- "$KW_SITE_STAGE/site.meta" "$KW_SITE_META" || return 1
   KW_SITE_META_CREATED=1
+  kw_site_initial_permissions || {
+    kw_log ERROR 'Không áp/xác minh được quyền của site mới; đang hoàn tác.'
+    return 1
+  }
   rm -f -- "$KW_SITE_STAGE/pool.conf" "$KW_SITE_STAGE/vhost.conf" "$KW_SITE_STAGE/site.meta" || return 1
   rmdir -- "$KW_SITE_STAGE" || return 1
   KW_SITE_DONE=1
-  printf 'Đã tạo site %s với PHP-FPM %s. Cần cấu hình DNS và SSL riêng.\n' "$domain" "$php"
+  printf 'Đã tạo site %s với PHP-FPM %s. Source thuộc %s:www-data; pool/vhost/metadata thuộc root. Cần cấu hình DNS và SSL riêng.\n' "$domain" "$php" "$KW_SITE_OWNER"
 )
 
 kw_site_create() (
@@ -834,6 +860,105 @@ kw_site_permissions_interactive() {
   kw_site_permissions "$domain" "${KW_PROMPT_VALUE,,}"
 }
 
+kw_site_laravel_plan() {
+  local domain=${1,,}
+  kw_site_lookup "$domain" || return 2
+  printf 'Chuẩn bị thư mục Laravel cho %s:\n' "$domain"
+  printf '  Git source: %s/source\n' "$KW_SITE_ROOT"
+  printf '  Release:    %s/deploy/releases\n' "$KW_SITE_ROOT"
+  printf '  Dùng chung: %s/deploy/shared/storage\n' "$KW_SITE_ROOT"
+  printf 'Sau bước này dùng menu Laravel của KwVPS để clone Git, sửa .env, pull và deploy.\n'
+  printf 'Bước chuẩn bị chỉ tạo thư mục rỗng; không clone Git, tạo .env/current, sửa Nginx hoặc DB.\n'
+  printf 'Nếu source/deploy hoặc cấu trúc cũ có tiền tố đã tồn tại, KwVPS dừng và không ghi đè.\n'
+}
+
+kw_site_laravel_create_layout() (
+  local root=$1 owner=$2 source deploy path index status expected_mode
+  local -a created=() web_paths=()
+  [[ $owner =~ ^kw[a-z0-9]{1,29}$ && -d $root && ! -L $root ]] || return 2
+  source="$root/source"
+  deploy="$root/deploy"
+  for path in "$source" "$deploy"; do
+    [[ ! -e $path && ! -L $path ]] || {
+      kw_log ERROR "Thư mục đã tồn tại; không thay đổi: $path"
+      return 2
+    }
+  done
+  for path in "$root"/*-source "$root"/*-deploy; do
+    [[ ! -e $path && ! -L $path ]] || {
+      kw_log ERROR "Site đã có cấu trúc deploy cũ; không tạo thêm: $path"
+      return 2
+    }
+  done
+  trap 'status=$?; if ((status != 0)); then for ((index=${#created[@]}-1; index>=0; index--)); do rmdir -- "${created[index]}" 2>/dev/null || kw_log WARN "Giữ thư mục không rỗng: ${created[index]}"; done; fi' EXIT
+  for path in \
+    "$source" "$deploy" "$deploy/releases" "$deploy/shared" \
+    "$deploy/shared/storage" "$deploy/shared/storage/app" \
+    "$deploy/shared/storage/app/public" "$deploy/shared/storage/app/private" \
+    "$deploy/shared/storage/logs" "$deploy/shared/storage/framework" \
+    "$deploy/shared/storage/framework/cache" "$deploy/shared/storage/framework/cache/data" \
+    "$deploy/shared/storage/framework/sessions" "$deploy/shared/storage/framework/views"; do
+    runuser -u "$owner" -- mkdir -m 0750 -- "$path" || return 1
+    created+=("$path")
+  done
+  web_paths=("$deploy" "$deploy/releases" "$deploy/shared" "$deploy/shared/storage" \
+    "$deploy/shared/storage/app" "$deploy/shared/storage/app/public")
+  for path in "${web_paths[@]}"; do
+    [[ -d $path && ! -L $path ]] || return 2
+    chown -h -- "$owner:www-data" "$path" || return 1
+  done
+  # New upload subdirectories inherit www-data. Apply chmod as the site user:
+  # this path is writable by that user, so root must not follow a raced link.
+  runuser -u "$owner" -- chmod 2750 -- "$deploy/shared/storage/app/public" || return 1
+  for path in "${created[@]}"; do
+    expected_mode=750
+    [[ $path != "$deploy/shared/storage/app/public" ]] || expected_mode=2750
+    [[ -d $path && ! -L $path &&
+       $(stat -c '%U:%a' -- "$path") == "$owner:$expected_mode" ]] || {
+      kw_log ERROR "Quyền thư mục Laravel không đúng; chưa hoàn tất: $path"
+      return 1
+    }
+  done
+  for path in "${web_paths[@]}"; do
+    [[ $(stat -c %G -- "$path") == www-data ]] || {
+      kw_log ERROR "Nhóm truy cập Nginx không đúng; chưa hoàn tất: $path"
+      return 1
+    }
+  done
+  trap - EXIT
+  printf 'Đã chuẩn bị %s và %s. Chưa clone code hoặc đổi website.\n' "$source" "$deploy"
+)
+
+kw_site_laravel_prepare() (
+  local domain=${1,,} confirm=${2:-} command
+  kw_domain_valid "$domain" && [[ $confirm == "$domain" ]] || return 2
+  ((EUID == 0)) || { kw_log ERROR 'Cần root để chuẩn bị Laravel.'; return 2; }
+  for command in flock runuser mkdir chown chmod stat rmdir; do
+    kw_has "$command" || { kw_log ERROR "Thiếu công cụ $command."; return 2; }
+  done
+  exec 9>/run/lock/kwvps-sites.lock || return 2
+  flock -n 9 || return 1
+  kw_site_lookup "$domain" || return 2
+  [[ $(stat -c '%U:%G' -- "$KW_SITE_ROOT") == "$KW_SITE_OWNER:www-data" ]] || {
+    kw_log ERROR 'Owner/group của thư mục site chưa đúng; kiểm tra quyền trước khi tiếp tục.'
+    return 2
+  }
+  runuser -u www-data -- test -x "$KW_SITE_ROOT" || {
+    kw_log ERROR 'Nginx không thể truy cập thư mục site; kiểm tra quyền trước khi tiếp tục.'
+    return 2
+  }
+  kw_site_laravel_create_layout "$KW_SITE_ROOT" "$KW_SITE_OWNER"
+)
+
+kw_site_laravel_interactive() {
+  local domain
+  kw_site_prompt_domain || return 0
+  domain=$KW_SITE_CHOICE
+  kw_site_laravel_plan "$domain" || return 2
+  kw_prompt_yes_no_token "Tạo thư mục Laravel cho $domain?" "$domain" || return 0
+  kw_site_laravel_prepare "$domain" "${KW_PROMPT_VALUE,,}"
+}
+
 kw_site_remove_plan() {
   local domain=${1,,} php id file key value name user
   kw_site_lookup "$domain" || return 2
@@ -886,14 +1011,18 @@ kw_site_remove_preflight() {
     kw_log ERROR 'Pool đã tùy chỉnh; không tự gỡ.'; return 2;
   }
   KW_REMOVE_RENEWAL=''
-  if ! cmp -s -- "$KW_SITE_VHOST" <(kw_site_render_vhost "$domain" "$id"); then
-    if cmp -s -- "$KW_SITE_VHOST" <(kw_ssl_render_paid_vhost "$domain" "$id"); then
+  if ! cmp -s -- "$KW_SITE_VHOST" <(kw_site_render_vhost "$domain" "$id") &&
+     ! cmp -s -- "$KW_SITE_VHOST" <(kw_laravel_render_vhost http "$domain" "$id"); then
+    if cmp -s -- "$KW_SITE_VHOST" <(kw_ssl_render_paid_vhost "$domain" "$id") ||
+       cmp -s -- "$KW_SITE_VHOST" <(kw_laravel_render_vhost paid "$domain" "$id"); then
       [[ -d /etc/kwvps/certs/$id && ! -L /etc/kwvps/certs/$id && \
          -f /etc/kwvps/certs/$id/fullchain.pem && ! -L /etc/kwvps/certs/$id/fullchain.pem && \
          -f /etc/kwvps/certs/$id/privkey.pem && ! -L /etc/kwvps/certs/$id/privkey.pem ]] || return 2
     else
       if ! cmp -s -- "$KW_SITE_VHOST" <(kw_ssl_render_vhost "$domain" "$id") &&
-         ! cmp -s -- "$KW_SITE_VHOST" <(kw_ssl_render_vhost "$domain" "$id" zerossl); then
+         ! cmp -s -- "$KW_SITE_VHOST" <(kw_ssl_render_vhost "$domain" "$id" zerossl) &&
+         ! cmp -s -- "$KW_SITE_VHOST" <(kw_laravel_render_vhost letsencrypt "$domain" "$id") &&
+         ! cmp -s -- "$KW_SITE_VHOST" <(kw_laravel_render_vhost zerossl "$domain" "$id"); then
         kw_log ERROR 'Vhost đã tùy chỉnh; không tự gỡ.'; return 2
       fi
       renew="/etc/letsencrypt/renewal/${domain}.conf"
@@ -1068,13 +1197,24 @@ kw_site_retired_preflight() {
      -L $dir/enabled.conf && $(readlink -- "$dir/enabled.conf") == "$KW_SITE_VHOST" ]] || return 2
   cmp -s -- "$dir/pool.conf" <(kw_site_render_pool "$id" "$KW_SITE_OWNER") || return 2
   KW_RETIRED_RENEWAL=''
-  if ! cmp -s -- "$dir/vhost.conf" <(kw_site_render_vhost "$domain" "$id"); then
-    cmp -s -- "$dir/vhost.conf" <(kw_ssl_render_vhost "$domain" "$id") || return 2
-    [[ -f $dir/renewal.conf && ! -L $dir/renewal.conf ]] || return 2
-    [[ -f /etc/letsencrypt/live/$domain/fullchain.pem && \
-       -f /etc/letsencrypt/live/$domain/privkey.pem ]] || return 2
-    KW_RETIRED_RENEWAL="/etc/letsencrypt/renewal/$domain.conf"
-    [[ ! -e $KW_RETIRED_RENEWAL && ! -L $KW_RETIRED_RENEWAL ]] || return 2
+  if ! cmp -s -- "$dir/vhost.conf" <(kw_site_render_vhost "$domain" "$id") &&
+     ! cmp -s -- "$dir/vhost.conf" <(kw_laravel_render_vhost http "$domain" "$id"); then
+    if cmp -s -- "$dir/vhost.conf" <(kw_ssl_render_paid_vhost "$domain" "$id") ||
+       cmp -s -- "$dir/vhost.conf" <(kw_laravel_render_vhost paid "$domain" "$id"); then
+      [[ -f /etc/kwvps/certs/$id/fullchain.pem && -f /etc/kwvps/certs/$id/privkey.pem ]] || return 2
+    else
+      if ! cmp -s -- "$dir/vhost.conf" <(kw_ssl_render_vhost "$domain" "$id") &&
+         ! cmp -s -- "$dir/vhost.conf" <(kw_ssl_render_vhost "$domain" "$id" zerossl) &&
+         ! cmp -s -- "$dir/vhost.conf" <(kw_laravel_render_vhost letsencrypt "$domain" "$id") &&
+         ! cmp -s -- "$dir/vhost.conf" <(kw_laravel_render_vhost zerossl "$domain" "$id"); then
+        return 2
+      fi
+      [[ -f $dir/renewal.conf && ! -L $dir/renewal.conf ]] || return 2
+      [[ -f /etc/letsencrypt/live/$domain/fullchain.pem && \
+         -f /etc/letsencrypt/live/$domain/privkey.pem ]] || return 2
+      KW_RETIRED_RENEWAL="/etc/letsencrypt/renewal/$domain.conf"
+      [[ ! -e $KW_RETIRED_RENEWAL && ! -L $KW_RETIRED_RENEWAL ]] || return 2
+    fi
   fi
   for path in "$KW_SITE_ROOT" "$KW_SITE_META" "$KW_SITE_POOL" "$KW_SITE_VHOST" "$KW_SITE_ENABLED" "$KW_SITE_SOCKET"; do
     [[ ! -e $path && ! -L $path ]] || { kw_log ERROR "Đích đã tồn tại: $path"; return 2; }

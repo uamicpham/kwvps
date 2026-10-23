@@ -322,15 +322,6 @@ kw_tunnel_config_interactive() {
 }
 
 # Manage public ingress only. Nginx keeps listening on loopback for cloudflared.
-kw_tunnel_inbound_rules() {
-  LC_ALL=C ufw status numbered | awk '
-    /ALLOW IN/ && /(^|[[:space:]])(80|443)\/tcp([[:space:]]|$)/ {
-      if ($0 ~ /(^|[[:space:]])80\/tcp([[:space:]]|$)/) p=80; else p=443
-      if ($0 ~ /\(v6\)/) v=6; else v=4
-      print p, v
-    }'
-}
-
 kw_tunnel_acme_renewals() {
   local file
   shopt -s nullglob
@@ -341,58 +332,122 @@ kw_tunnel_acme_renewals() {
   shopt -u nullglob
 }
 
+kw_tunnel_inbound_rollback() {
+  local port number
+  local -a numbers
+  ((committed == 0)) || return 0
+  if [[ $action == open && $removed_attempted == 1 ]]; then
+    for port in "${removed_ports[@]}"; do
+      mapfile -t numbers < <(kw_fw_rule_numbers port-deny "$port" tcp)
+      ((${#numbers[@]} == 0)) || continue
+      ufw insert 1 deny "$port/tcp" comment "kwvps-port-deny-$port-tcp" ||
+        kw_log ERROR "Không phục hồi được DENY $port/tcp; kiểm tra UFW thủ công."
+    done
+  fi
+  for port in "${created_ports[@]}"; do
+    mapfile -t numbers < <(kw_fw_rule_numbers port-deny "$port" tcp | sort -nr)
+    for number in "${numbers[@]}"; do
+      ufw --force delete "$number" || kw_log ERROR "Không hoàn tác được DENY $port/tcp; kiểm tra UFW thủ công."
+    done
+  done
+  if ((was_inactive)); then
+    ufw --force disable || kw_log ERROR 'Không tắt lại được UFW sau lỗi; kiểm tra console cứu hộ.'
+  fi
+  kw_log WARN 'Thao tác inbound chưa hoàn tất; đã thử hoàn tác các rule mới.'
+}
+
 kw_tunnel_inbound_change() (
-  local action=$1 rules renewals port
+  local action=$1 renewals='' port state line number ssh_ports ssh_port committed=0 was_inactive=0 removed_attempted=0
+  local -a created_ports=() removed_ports=() numbers=()
   ((EUID == 0)) || { kw_log ERROR 'Cần root để đổi inbound 80/443.'; return 2; }
-  kw_fw_ready || return 2
   [[ $action == close || $action == open ]] || return 2
+  kw_has ufw && kw_has flock || return 2
+  exec 9>/run/lock/kwvps-ufw.lock || return 2
+  flock -n 9 || { kw_log ERROR 'Một thao tác UFW khác đang chạy.'; return 1; }
   if [[ $action == close ]]; then
     systemctl is-active --quiet cloudflared.service || {
       kw_log ERROR 'Tunnel chưa active; giữ inbound 80/443.'; return 2;
     }
-    LC_ALL=C ufw status verbose | grep -Eq '^Default: deny \(incoming\)' || {
-      kw_log ERROR 'UFW không mặc định deny incoming; không thể bảo đảm đóng cổng bằng cách gỡ ALLOW.'; return 2;
+    kw_fw_ipv6_enabled || {
+      kw_log ERROR 'UFW IPV6 chưa bật; không thể bảo đảm đóng inbound 80/443 trên IPv6.'; return 2;
     }
+    ssh_ports=$(kw_fw_ssh_ports) || return 2
+    [[ -n $ssh_ports ]] || return 2
+    while IFS= read -r ssh_port; do
+      [[ $ssh_port != 80 && $ssh_port != 443 ]] || {
+        kw_log ERROR "SSH đang dùng cổng $ssh_port; từ chối khóa inbound 80/443."
+        return 2
+      }
+    done <<< "$ssh_ports"
     renewals=$(kw_tunnel_acme_renewals) || return 2
     if [[ -n $renewals ]]; then
       printf 'Phát hiện chứng chỉ HTTP-01 webroot:\n%s\n' "$renewals"
       kw_has certbot || { kw_log ERROR 'Thiếu certbot; giữ cổng 80.'; return 2; }
     fi
-    rules=$(kw_tunnel_inbound_rules) || return 2
-    if [[ -z $rules ]]; then printf 'Inbound 80/443 đã không có ALLOW trong UFW.\n'; return 0; fi
-    # UFW removes matching IPv4 and IPv6 rules together. Roll back both on failure.
-    trap 'for port in 80 443; do [[ $rules != *"$port "* ]] || ufw allow "$port/tcp" >/dev/null; done; kw_log WARN "Đã khôi phục ALLOW 80/443 sau lỗi; kiểm tra ufw status numbered."' EXIT
+  fi
+  state=$(LC_ALL=C ufw status) || return 2
+  [[ $state == 'Status: inactive'* ]] && was_inactive=1
+  trap kw_tunnel_inbound_rollback EXIT
+  if [[ $action == open ]]; then
+    kw_fw_enable_safe || return 2
+  else
+    kw_fw_enable_safe || return 2
+  fi
+  if [[ $action == close ]]; then
     for port in 80 443; do
-      [[ $rules == *"$port "* ]] || continue
-      ufw --force delete allow "$port/tcp" || return 1
+      mapfile -t numbers < <(kw_fw_rule_numbers port-deny "$port" tcp)
+      ((${#numbers[@]} > 0)) && continue
+      ufw insert 1 deny "$port/tcp" comment "kwvps-port-deny-$port-tcp" || return 1
+      created_ports+=("$port")
     done
-    if [[ -n $(kw_tunnel_inbound_rules) ]]; then
-      kw_log ERROR 'Vẫn còn rule ALLOW inbound 80/443; sẽ khôi phục trạng thái trước đó.'
-      return 1
-    fi
+    for port in 80 443; do
+      mapfile -t numbers < <(kw_fw_rule_numbers port-deny "$port" tcp)
+      ((${#numbers[@]} > 0)) || { kw_log ERROR "Không xác minh được DENY $port/tcp."; return 1; }
+    done
     if [[ -n $renewals ]]; then
       printf 'Đang thử gia hạn ACME qua Tunnel khi inbound đã đóng...\n'
       certbot renew --dry-run --no-random-sleep-on-renew --non-interactive --quiet || {
-        kw_log ERROR 'Thử gia hạn HTTP-01 thất bại; sẽ mở lại inbound 80/443.'; return 1;
+        kw_log ERROR 'Thử gia hạn HTTP-01 thất bại; sẽ hoàn tác rule chặn 80/443.'; return 1;
       }
     fi
-    trap - EXIT
-    printf 'Đã đóng inbound UFW 80/443; Nginx local và outbound Tunnel không đổi.\n'
+    printf 'Đã khóa inbound UFW 80/443 bằng DENY ưu tiên; Nginx local và outbound Tunnel không đổi.\n'
   else
+    state=$(LC_ALL=C ufw status numbered) || return 2
+    while IFS= read -r line; do
+      for port in 80 443; do
+        if [[ $line =~ ^\[[[:space:]]*[0-9]+\][[:space:]]+${port}/tcp[[:space:]] &&
+              $line == *'DENY IN'* && $line != *"# kwvps-port-deny-$port-tcp" ]]; then
+          kw_log ERROR "Còn rule DENY ngoài KwVPS cho $port/tcp; không tự thay rule này."
+          return 2
+        fi
+      done
+    done <<< "$state"
     for port in 80 443; do
-      if ! kw_tunnel_inbound_rules | grep -q "^$port "; then
-        ufw allow "$port/tcp" comment "kwvps-port-$port-tcp" || return 1
-      fi
+      mapfile -t numbers < <(kw_fw_rule_numbers port-deny "$port" tcp)
+      ((${#numbers[@]} == 0)) || removed_ports+=("$port")
+    done
+    mapfile -t numbers < <({ kw_fw_rule_numbers port-deny 80 tcp; kw_fw_rule_numbers port-deny 443 tcp; } | sort -nr)
+    ((${#numbers[@]} == 0)) || removed_attempted=1
+    for number in "${numbers[@]}"; do ufw --force delete "$number" || return 1; done
+    for port in 80 443; do
+      ufw allow "$port/tcp" comment "kwvps-port-$port-tcp" || return 1
+      kw_fw_port_has_action "$port" tcp ALLOW || {
+        kw_log ERROR "Không xác minh được ALLOW $port/tcp."; return 1;
+      }
     done
     printf 'Đã mở inbound UFW 80/443.\n'
   fi
+  committed=1
+  trap - EXIT
   LC_ALL=C ufw status numbered
 )
 
 kw_tunnel_inbound_interactive() {
   local choice
   printf 'Inbound 80/443 chỉ là firewall UFW, không tắt Nginx local.\n'
-  printf 'Đóng cổng 80 có thể ảnh hưởng HTTP-01; KwVPS sẽ thử gia hạn ACME và khôi phục nếu lỗi.\n'
+  printf 'Nếu UFW đang tắt, KwVPS sẽ bảo vệ SSH rồi tự bật UFW; các dịch vụ inbound khác có thể bị chặn.\n'
+  printf 'Lần bật UFW để mở 80/443 có thể gián đoạn inbound ngắn trước khi ALLOW được thêm.\n'
+  printf 'Đóng cổng 80 có thể ảnh hưởng HTTP-01; KwVPS sẽ thử gia hạn ACME và hoàn tác nếu lỗi.\n'
   printf 'Firewall nhà cung cấp VPS nằm ngoài KwVPS.\n1. Đóng inbound 80/443\n2. Mở inbound 80/443\n0. Quay lại\nChọn: '
   IFS= read -r choice || return 0
   case "$choice" in

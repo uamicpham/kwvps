@@ -9,18 +9,19 @@ kw_catalog() {
         'Quản lý cache|@cache' 'Quản lý swap|@swap' 'Quản lý Firewall|@firewall' \
         'Quản lý Disk|@disk' 'Quản lý Logs|@logs' 'Quản lý Update|@update' \
         'Sao lưu/phục hồi|@backup' 'Quản lý Cloudflare Tunnel|@tunnel' 'Công cụ nâng cao|@advanced' ;;
-    sites) printf '%s\n' 'Danh sách Site|site-list' 'Thêm domain|site-add' 'Đổi tên miền|site-rename' 'Nhân bản site|site-clone' 'Xóa Site|site-remove' 'Phân lại quyền hạn|site-permissions' ;;
+    sites) printf '%s\n' 'Danh sách Site|site-list' 'Thêm domain|site-add' 'Đổi tên miền|site-rename' 'Nhân bản site|site-clone' 'Xóa Site|site-remove' 'Phân lại quyền hạn|site-permissions' 'Laravel theo site|@laravel' ;;
+    laravel) printf '%s\n' 'Chuẩn bị thư mục Laravel|site-laravel' 'Kiểm tra trạng thái/công cụ|laravel-status' 'Clone Git vào source|laravel-clone' 'Pull code|laravel-pull' 'Sửa .env riêng của site|laravel-env' 'Deploy release Laravel|laravel-deploy' ;;
     ssl) printf '%s\n' 'Xem SSL|ssl-status' 'Cấp SSL ACME|ssl-issue' 'Thêm paid SSL|ssl-paid' 'Domain không SSL|ssl-unsecured' 'Đổi ACME provider|acme-provider' ;;
     ssh) printf '%s\n' 'Đổi port SSH|pending' 'Đổi mật khẩu tài khoản SSH|ssh-password' 'Giới hạn đăng nhập|ssh-limits' 'Quản lý public key|ssh-keys' 'Chỉ cho phép AuthKey|pending' ;;
     db) printf '%s\n' 'Danh sách DB|db-managed-list' 'Danh sách User DB|db-users-list' 'Đổi Pass Database (User DB)|db-password' 'Tạo DB|db-custom-create' 'Xóa DB|db-drop-named' 'Import DB|db-import-upload' 'Export DB|db-export-named' ;;
     php) printf '%s\n' 'Danh sách PHP/package|packages' 'Kiểm tra bản vá PHP|php-security' 'Cấu hình PHP pool từng site|php-pool' 'Đổi PHP version theo site|php-switch' 'ionCube theo version|php-ioncube' 'Custom pool (nano)|php-custom' 'Cài gói PHP-FPM|php-install' ;;
-    nginx) printf '%s\n' 'Phục hồi vhost HTTP của domain|nginx-restore' 'Áp baseline global|nginx-baseline' 'Kiểm tra cấu hình web server|nginx-check' ;;
+    nginx) printf '%s\n' 'Phục hồi vhost HTTP của domain|nginx-restore' 'Áp baseline global|nginx-baseline' 'Kiểm tra cấu hình web server|nginx-check' 'Sửa vhost theo domain (nano)|nginx-vhost-custom' ;;
     fail2ban) printf '%s\n' 'Trạng thái và jail|fail2ban' 'Xem IP bị khóa|f2b-banned' 'Khóa IPv4 thủ công|f2b-ban' 'Mở khóa IPv4|f2b-unban' ;;
     utilities) printf '%s\n' 'Cài/kiểm tra quyền phpMyAdmin|pma-permissions' 'phpMyAdmin theo site|pma-site' 'phpMyAdmin admin tất cả DB|pma-admin' ;;
     cron) printf '%s\n' 'Xem crontab tài khoản hiện tại|cron' 'Xem crontab chung/root|cron-system' 'Custom root crontab (nano)|cron-nano' ;;
     cache) printf '%s\n' 'Xóa cache domain|cache-clear' 'Quản lý cache domain|cache-status' 'Quản lý Redis|cache-redis' 'Quản lý FastCGI|cache-fcgi' ;;
     swap) printf '%s\n' 'Xem swap|swap' 'Thêm swapfile KwVPS|swap-add' 'Xóa swapfile KwVPS|swap-remove' ;;
-    firewall) printf '%s\n' 'Port listen và trạng thái UFW|ports' 'Mở port|fw-open-port' 'Khóa port KwVPS|fw-close-port' 'Rule UFW/IP bị khóa|fw-list-ip' 'Khóa IPv4|fw-ban-ip' 'Mở khóa IPv4 KwVPS|fw-unban-ip' ;;
+    firewall) printf '%s\n' 'Port listen và trạng thái UFW|ports' 'Mở port|fw-open-port' 'Khóa port|fw-close-port' 'Rule UFW/IP bị khóa|fw-list-ip' 'Khóa IPv4|fw-ban-ip' 'Mở khóa IPv4 KwVPS|fw-unban-ip' 'Bật Firewall UFW|fw-enable' 'Tắt Firewall UFW|fw-disable' ;;
     disk) printf '%s\n' 'Kiểm tra disk domain|site-disk' 'Tìm file lớn domain|site-large' ;;
     logs) printf '%s\n' 'Logs Nginx của domain|site-log' 'Nginx service journal|nginx-log' 'Journal PHP-FPM theo site|site-php-log' 'Database service journal|db-log' 'Dọn toàn bộ log|logs-cleanup' ;;
     update) printf '%s\n' 'Kiểm tra / cập nhật KwVPS|kwvps-update' 'Kiểm tra / cập nhật Ubuntu|ubuntu-update' 'Cập nhật service|@service-update' 'Cấu hình GitHub repository|github-repo' ;;
@@ -52,6 +53,12 @@ kw_action() {
     site-clone) kw_site_clone_interactive ;;
     site-remove) kw_site_remove_interactive ;;
     site-permissions) kw_site_permissions_interactive ;;
+    site-laravel) kw_site_laravel_interactive ;;
+    laravel-status) kw_laravel_interactive status ;;
+    laravel-clone) kw_laravel_interactive clone ;;
+    laravel-pull) kw_laravel_interactive pull ;;
+    laravel-env) kw_laravel_interactive env ;;
+    laravel-deploy) kw_laravel_interactive deploy ;;
     site-retired) kw_site_retired_interactive ;;
     site-purge) kw_site_purge_interactive ;;
     site-disk) kw_site_disk_interactive ;;
@@ -89,6 +96,7 @@ kw_action() {
     nginx-check) kw_nginx_check ;;
     nginx-restore) kw_nginx_restore_interactive ;;
     nginx-baseline) kw_nginx_baseline_interactive ;;
+    nginx-vhost-custom) kw_nginx_vhost_custom_interactive ;;
     ssl-status) kw_ssl_status ;;
     ssl-unsecured) kw_ssl_status unsecured ;;
     ssl-issue) kw_ssl_issue_interactive ;;
@@ -120,6 +128,8 @@ kw_action() {
     ports) kw_ports ;;
     fw-open-port) kw_fw_port_interactive open ;;
     fw-close-port) kw_fw_port_interactive close ;;
+    fw-enable) kw_fw_toggle_interactive enable ;;
+    fw-disable) kw_fw_toggle_interactive disable ;;
     fw-list-ip) kw_fw_ip_list ;;
     fw-ban-ip) kw_fw_ip_interactive ban ;;
     fw-unban-ip) kw_fw_ip_interactive unban ;;
@@ -148,7 +158,7 @@ kw_action() {
 
 kw_menu_title() {
   case "$1" in
-    main) printf 'Menu chính' ;; sites) printf 'Quản lý Sites' ;;
+    main) printf 'Menu chính' ;; sites) printf 'Quản lý Sites' ;; laravel) printf 'Laravel theo site' ;;
     ssl) printf 'Quản lý SSL' ;; ssh) printf 'Quản lý SSH / AuthKey' ;;
     db) printf 'Quản lý Database' ;; php) printf 'Quản lý PHP' ;;
     nginx) printf 'Quản lý Nginx' ;; fail2ban) printf 'Quản lý Fail2ban' ;;

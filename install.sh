@@ -16,8 +16,10 @@ source "$KW_INSTALL_ROOT/src/system.sh"
 source "$KW_INSTALL_ROOT/src/updates.sh"
 # shellcheck source=src/php.sh
 source "$KW_INSTALL_ROOT/src/php.sh"
+# shellcheck source=src/backups.sh
+source "$KW_INSTALL_ROOT/src/backups.sh"
 readonly -a KW_INSTALL_MODULES=(
-  core.sh system.sh updates.sh sites.sh php.sh backups.sh config_backups.sh
+  core.sh system.sh updates.sh sites.sh laravel.sh php.sh backups.sh config_backups.sh
   db.sh db_manage.sh rename.sh fail2ban.sh firewall.sh swap.sh nginx.sh
   acme.sh ssl.sh cloudflare.sh tunnel.sh ssh.sh cache.sh utilities.sh
   cron.sh menu.sh
@@ -28,6 +30,7 @@ install_usage() {
     'KwVPS installer — chỉ cho VPS Ubuntu Server 24.04 LTS sạch.' \
     'bash install.sh --check   Kiểm tra điều kiện (không thay đổi máy)' \
     'sudo bash install.sh --apply   Cài package nền tảng và lệnh kwvps' \
+    'Nếu chưa có, tạo /var/backups/kwvps (root:root, quyền 0700).' \
     'Bản release GitHub được tải và kiểm tra SHA-256 trước khi gọi bộ cài.'
 }
 
@@ -62,6 +65,26 @@ install_source_preflight() {
     IFS= read -r release_repo < "$KW_INSTALL_ROOT/release-repo" || return 2
     kw_github_repo_valid "$release_repo" || return 2
   fi
+}
+
+install_backup_preflight() {
+  if [[ -e /var/backups || -L /var/backups ]]; then
+    kw_backup_dir_safe /var/backups 0022 || return 2
+  fi
+  if [[ -e $KW_BACKUP_ROOT || -L $KW_BACKUP_ROOT ]]; then
+    kw_backup_dir_safe "$KW_BACKUP_ROOT" 0077 || return 2
+  fi
+}
+
+install_backup_root() {
+  if [[ ! -e /var/backups && ! -L /var/backups ]]; then
+    install -d -m 0755 -o root -g root -- /var/backups || return 1
+  fi
+  kw_backup_dir_safe /var/backups 0022 || return 2
+  if [[ ! -e $KW_BACKUP_ROOT && ! -L $KW_BACKUP_ROOT ]]; then
+    install -d -m 0700 -o root -g root -- "$KW_BACKUP_ROOT" || return 1
+  fi
+  kw_backup_dir_safe "$KW_BACKUP_ROOT" 0077 || return 2
 }
 
 install_preflight() {
@@ -102,6 +125,8 @@ install_preflight() {
   else printf '[STOP] Thiếu apt-get\n'; failed=1; fi
   if install_source_preflight; then printf '[OK] Bộ mã cài đặt đầy đủ\n';
   else printf '[STOP] Bộ mã cài đặt thiếu/hỏng\n'; failed=1; fi
+  if install_backup_preflight; then printf '[OK] Đường dẫn backup an toàn\n';
+  else printf '[STOP] /var/backups/kwvps hoặc thư mục cha không an toàn; chưa cài đặt.\n'; failed=1; fi
   return "$failed"
 }
 
@@ -111,7 +136,7 @@ install_apply() {
   install_preflight || result=$?
   if ((result == 10)); then return 0; fi
   ((result == 0)) || return 2
-  printf '\nSẽ cài Nginx, PHP 8.3 FPM, MariaDB, Fail2ban, UFW, cron, nano, curl và KwVPS. Không bật UFW, cấu hình DNS hay SSL.\n'
+  printf '\nSẽ cài Nginx, PHP 8.3 FPM/CLI, MariaDB, Fail2ban, UFW, cron, nano, curl, git, zip, unzip và KwVPS. Không bật UFW, cấu hình DNS hay SSL.\n'
   printf 'Nhập INSTALL KWVPS để xác nhận: '
   [[ -r /dev/tty ]] || { printf 'Cần terminal tương tác.\n' >&2; return 2; }
   IFS= read -r phrase < /dev/tty || return 2
@@ -125,7 +150,7 @@ install_apply() {
     printf 'DỪNG: PHP 8.3 ứng viên (%s) chưa có bản vá RCE được xác minh. Cần gói Ubuntu 24.04 .13 trở lên hoặc upstream 8.3.36 trở lên.\n' "$candidate" >&2
     return 2
   fi
-  apt-get install -y nginx php8.3-fpm mariadb-server fail2ban ufw cron nano curl || {
+  apt-get install -y nginx php8.3-fpm php8.3-cli mariadb-server fail2ban ufw cron nano curl git zip unzip || {
     printf 'ERROR: Cài package thất bại; cần kiểm tra APT trước khi chạy lại KwVPS.\n' >&2
     return 1
   }
@@ -139,6 +164,7 @@ install_apply() {
       return 1
     }
   done
+  install_backup_root || return 1
   install -d -m 0755 /opt/kwvps /opt/kwvps/src /opt/kwvps/scripts /var/www/kwvps || return 1
   install -d -m 0755 /etc/kwvps /etc/kwvps/sites || return 1
   install -m 0755 "$KW_INSTALL_ROOT/kwvps" /opt/kwvps/kwvps || return 1
@@ -159,6 +185,7 @@ install_apply() {
   install -m 0755 "$KW_INSTALL_ROOT/scripts/kwvps-launcher" /usr/local/bin/kwvps || return 1
   printf 'kwvps-v1\n' > /etc/kwvps/install-id || return 1
   chmod 0644 /etc/kwvps/install-id || return 1
+  printf 'Thư mục backup: %s (chỉ root được truy cập).\n' "$KW_BACKUP_ROOT"
   printf 'Cài xong. Chạy kwvps --doctor rồi mở menu bằng kwvps.\n'
 }
 

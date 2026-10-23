@@ -15,6 +15,8 @@ source "$KW_ROOT/src/system.sh"
 source "$KW_ROOT/src/updates.sh"
 # shellcheck source=src/sites.sh
 source "$KW_ROOT/src/sites.sh"
+# shellcheck source=src/laravel.sh
+source "$KW_ROOT/src/laravel.sh"
 # shellcheck source=src/php.sh
 source "$KW_ROOT/src/php.sh"
 # shellcheck source=src/backups.sh

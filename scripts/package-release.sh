@@ -22,7 +22,7 @@ install -m 0755 install.sh upgrade.sh kwvps "$stage/kwvps/"
 install -m 0755 scripts/kwvps-launcher scripts/cf_limit_ban.py "$stage/kwvps/scripts/"
 install -m 0644 scripts/restore_source.py scripts/kwvps-cf-limit-ban.service \
   scripts/kwvps-cf-limit-ban.timer "$stage/kwvps/scripts/"
-for file in core.sh system.sh updates.sh sites.sh php.sh backups.sh config_backups.sh \
+for file in core.sh system.sh updates.sh sites.sh laravel.sh php.sh backups.sh config_backups.sh \
   db.sh db_manage.sh rename.sh fail2ban.sh firewall.sh swap.sh nginx.sh acme.sh \
   ssl.sh cloudflare.sh tunnel.sh ssh.sh cache.sh utilities.sh cron.sh menu.sh; do
   install -m 0644 "src/$file" "$stage/kwvps/src/$file"

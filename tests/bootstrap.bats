@@ -60,6 +60,15 @@ setup() {
   [[ "$output" == *'Kiến trúc này chưa được hỗ trợ; cần x86_64'* ]]
 }
 
+@test "installer wires root-only backup directory creation into new installs" {
+  run bash install.sh --help
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'/var/backups/kwvps (root:root, quyền 0700)'* ]]
+  grep -Fq 'if install_backup_preflight; then' install.sh
+  grep -Fq 'install_backup_root || return 1' install.sh
+  grep -Fq 'install -d -m 0700 -o root -g root -- "$KW_BACKUP_ROOT"' install.sh
+}
+
 @test "APT candidate reader drains output without SIGPIPE under pipefail" {
   printf '%s\n' '#!/usr/bin/env bash' \
     'printf "php8.3-fpm:\n  Candidate: 8.3.6-0ubuntu0.24.04.13\n"' \

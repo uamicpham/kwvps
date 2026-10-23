@@ -133,15 +133,25 @@ kw_ssl_status() {
 }
 
 kw_ssl_require_pristine_http() {
-  local domain=$1 id
+  local domain=$1 id target
   kw_site_lookup "$domain" || return 2
   id=${KW_SITE_OWNER#kw}
   [[ -f $KW_SITE_VHOST && ! -L $KW_SITE_VHOST && $(stat -c %u -- "$KW_SITE_VHOST") == 0 && \
      -L $KW_SITE_ENABLED && $(readlink -f -- "$KW_SITE_ENABLED") == "$KW_SITE_VHOST" ]] || return 2
-  cmp -s -- "$KW_SITE_VHOST" <(kw_site_render_vhost "$domain" "$id") || {
-    kw_log ERROR 'Vhost không phải mẫu HTTP hiện tại; từ chối ghi đè cấu hình tùy chỉnh/SSL.'
-    return 2
-  }
+  if cmp -s -- "$KW_SITE_VHOST" <(kw_site_render_vhost "$domain" "$id"); then
+    KW_SSL_LARAVEL=0
+    return 0
+  fi
+  if cmp -s -- "$KW_SITE_VHOST" <(kw_laravel_render_vhost http "$domain" "$id"); then
+    [[ -L $KW_SITE_ROOT/deploy/current ]] || return 2
+    target=$(readlink -- "$KW_SITE_ROOT/deploy/current") || return 2
+    [[ $target == releases/* && $target != *..* &&
+       -d $KW_SITE_ROOT/deploy/$target/public ]] || return 2
+    KW_SSL_LARAVEL=1
+    return 0
+  fi
+  kw_log ERROR 'Vhost không phải mẫu HTTP KwVPS; từ chối ghi đè cấu hình tùy chỉnh/SSL.'
+  return 2
 }
 
 kw_ssl_issue_locked() (
@@ -171,15 +181,23 @@ kw_ssl_issue_locked() (
   backup=$KW_NGINX_BACKUP
   temp=$(mktemp /etc/nginx/sites-available/.kwvps-ssl.XXXXXXXX) || return 1
   trap 'if ((swapped == 1 && committed == 0)); then cp -p -- "$backup" "$KW_SITE_VHOST" && kw_nginx_test_restart || kw_log ERROR "Rollback Nginx cần kiểm tra thủ công: $backup"; fi; [[ -z $temp ]] || rm -f -- "$temp"' EXIT
-  kw_ssl_render_vhost "$domain" "$id" "$provider" > "$temp" || return 1
+  if (( ${KW_SSL_LARAVEL:-0} )); then
+    kw_laravel_render_vhost "$provider" "$domain" "$id" > "$temp" || return 1
+  else
+    kw_ssl_render_vhost "$domain" "$id" "$provider" > "$temp" || return 1
+  fi
   chmod 0644 -- "$temp" || return 1
   mv -T -- "$temp" "$KW_SITE_VHOST" || return 1
   temp=''
   # shellcheck disable=SC2034 # Read by the EXIT rollback trap.
   swapped=1
   kw_nginx_test_restart || return 1
-  curl --fail --silent --show-error --max-time 15 --resolve "$domain:443:127.0.0.1" \
-    "https://$domain/" -o /dev/null || return 1
+  if (( ${KW_SSL_LARAVEL:-0} )); then
+    kw_laravel_health "$domain" "$provider" || return 1
+  else
+    curl --fail --silent --show-error --max-time 15 --resolve "$domain:443:127.0.0.1" \
+      "https://$domain/" -o /dev/null || return 1
+  fi
   # shellcheck disable=SC2034 # Read by the EXIT rollback trap.
   committed=1
   if ! kw_ssl_install_renew_hook; then
@@ -192,8 +210,10 @@ kw_ssl_issue() (
   local domain=${1,,} confirm=${2:-}
   kw_domain_valid "$domain" && [[ $confirm == "$domain" ]] || return 2
   ((EUID == 0)) || { kw_log ERROR 'Cần sudo/root.'; return 2; }
-  exec 9>/run/lock/kwvps-nginx.lock || return 2
+  exec 9>/run/lock/kwvps-sites.lock || return 2
   flock -n 9 || return 1
+  exec 8>/run/lock/kwvps-nginx.lock || return 2
+  flock -n 8 || return 1
   kw_ssl_issue_locked "$domain"
 )
 
@@ -270,7 +290,11 @@ kw_ssl_paid_locked() (
   kw_nginx_backup_file "$KW_SITE_VHOST" "paid-$id" || return 1
   backup=$KW_NGINX_BACKUP
   vhost_temp=$(mktemp /etc/nginx/sites-available/.kwvps-paid.XXXXXXXX) || return 1
-  kw_ssl_render_paid_vhost "$domain" "$id" > "$vhost_temp" || return 1
+  if (( ${KW_SSL_LARAVEL:-0} )); then
+    kw_laravel_render_vhost paid "$domain" "$id" > "$vhost_temp" || return 1
+  else
+    kw_ssl_render_paid_vhost "$domain" "$id" > "$vhost_temp" || return 1
+  fi
   chmod 0644 -- "$vhost_temp" || return 1
   mv -T -- "$temp" "$target" || return 1
   temp=''
@@ -281,7 +305,11 @@ kw_ssl_paid_locked() (
   # shellcheck disable=SC2034 # Read by the EXIT rollback trap.
   swapped=1
   kw_nginx_test_restart || return 1
-  curl --fail --silent --show-error --max-time 15 --resolve "$domain:443:127.0.0.1" "https://$domain/" -o /dev/null || return 1
+  if (( ${KW_SSL_LARAVEL:-0} )); then
+    kw_laravel_health "$domain" paid || return 1
+  else
+    curl --fail --silent --show-error --max-time 15 --resolve "$domain:443:127.0.0.1" "https://$domain/" -o /dev/null || return 1
+  fi
   # shellcheck disable=SC2034 # Read by the EXIT rollback trap.
   committed=1
   printf 'Đã cài paid SSL cho %s. Vhost cũ: %s\n' "$domain" "$backup"
@@ -291,8 +319,10 @@ kw_ssl_paid() (
   local domain=${1,,} cert_name=${2:-} key_name=${3:-} confirm=${4:-}
   kw_domain_valid "$domain" && kw_ssl_paid_input "$cert_name" && kw_ssl_paid_key_input "$key_name" && [[ $confirm == "$domain" ]] || return 2
   ((EUID == 0)) || return 2
-  exec 9>/run/lock/kwvps-nginx.lock || return 2
+  exec 9>/run/lock/kwvps-sites.lock || return 2
   flock -n 9 || return 1
+  exec 8>/run/lock/kwvps-nginx.lock || return 2
+  flock -n 8 || return 1
   kw_ssl_paid_locked "$domain" "$cert_name" "$key_name"
 )
 

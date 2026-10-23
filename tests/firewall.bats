@@ -12,6 +12,8 @@ setup() {
   [ "$status" -eq 0 ]
   run kw_fw_port_plan open 3306 tcp
   [ "$status" -eq 2 ]
+  run kw_fw_port_plan close 3306 tcp
+  [ "$status" -eq 0 ]
   run kw_fw_port_plan open '8080;id' tcp
   [ "$status" -eq 2 ]
   run kw_fw_port_plan open 8080 'tcp;id'
@@ -23,6 +25,8 @@ setup() {
   [ "$status" -eq 2 ]
   run kw_fw_ip_change ban 203.0.113.47 wrong
   [ "$status" -eq 2 ]
+  run kw_fw_toggle enable wrong
+  [ "$status" -eq 2 ]
 }
 
 @test "only marked UFW rules are selected for deletion" {
@@ -32,6 +36,7 @@ setup() {
     printf '[ 2] 8080/tcp (v6)              ALLOW IN    Anywhere (v6)              # kwvps-port-8080-tcp\n'
     printf '[ 3] 9090/tcp                   ALLOW IN    Anywhere                   # user-rule\n'
     printf '[ 4] Anywhere                   DENY IN     203.0.113.47               # kwvps-block-203-0-113-47\n'
+    printf '[ 5] 8080/tcp                   DENY IN     Anywhere                   # kwvps-port-deny-8080-tcp\n'
   }
   run kw_fw_rule_numbers port 8080 tcp
   [ "$status" -eq 0 ]
@@ -42,4 +47,31 @@ setup() {
   run kw_fw_rule_numbers ip 203.0.113.47
   [ "$status" -eq 0 ]
   [ "$output" = 4 ]
+  run kw_fw_rule_numbers port-deny 8080 tcp
+  [ "$status" -eq 0 ]
+  [ "$output" = 5 ]
+  run kw_fw_port_has_action 8080 tcp DENY
+  [ "$status" -eq 0 ]
+  run kw_fw_port_has_action 9090 tcp DENY
+  [ "$status" -eq 1 ]
+}
+
+@test "SSH guard collects configured and current SSH ports" {
+  kw_has() { return 0; }
+  sshd() { printf 'port 22\nport 2222\n'; }
+  systemctl() { return 1; }
+  SSH_CONNECTION='203.0.113.5 55444 192.0.2.10 2200'
+  run kw_fw_ssh_ports
+  [ "$status" -eq 0 ]
+  [ "$output" = $'22\n2222\n2200' ]
+}
+
+@test "SSH guard refuses active socket without the current SSH port" {
+  kw_has() { return 0; }
+  sshd() { printf 'port 22\n'; }
+  systemctl() { [[ $* == 'is-active --quiet ssh.socket' ]]; }
+  unset SSH_CONNECTION
+  run kw_fw_ssh_ports
+  [ "$status" -eq 2 ]
+  [[ "$output" == *'từ chối bật UFW'* ]]
 }

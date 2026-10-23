@@ -41,7 +41,7 @@ upgrade_preflight() {
   [[ $(stat -c %u -- /opt /opt/kwvps /opt/kwvps/src /usr/local/bin/kwvps) == $'0\n0\n0\n0' ]] || {
     kw_log ERROR 'Bản cài không thuộc sở hữu root.'; return 2;
   }
-  for file in kwvps src/core.sh src/system.sh src/updates.sh src/sites.sh src/php.sh src/backups.sh src/config_backups.sh src/db.sh src/db_manage.sh src/rename.sh src/fail2ban.sh src/firewall.sh src/swap.sh src/nginx.sh src/acme.sh src/ssl.sh src/cloudflare.sh src/tunnel.sh src/ssh.sh src/cache.sh src/utilities.sh src/cron.sh src/menu.sh; do
+  for file in kwvps src/core.sh src/system.sh src/updates.sh src/sites.sh src/laravel.sh src/php.sh src/backups.sh src/config_backups.sh src/db.sh src/db_manage.sh src/rename.sh src/fail2ban.sh src/firewall.sh src/swap.sh src/nginx.sh src/acme.sh src/ssl.sh src/cloudflare.sh src/tunnel.sh src/ssh.sh src/cache.sh src/utilities.sh src/cron.sh src/menu.sh; do
     [[ -f $KW_UPGRADE_ROOT/$file && ! -L $KW_UPGRADE_ROOT/$file ]] || {
       kw_log ERROR "Thiếu hoặc gặp symlink tại mã nguồn $file."; return 2;
     }
@@ -88,7 +88,7 @@ upgrade_apply_locked() {
   chmod 0755 -- "$stage" || return 1
   install -d -m 0755 -- "$stage/src" "$stage/scripts" || return 1
   install -m 0755 -- "$KW_UPGRADE_ROOT/kwvps" "$stage/kwvps" || return 1
-  for file in core.sh system.sh updates.sh sites.sh php.sh backups.sh config_backups.sh db.sh db_manage.sh rename.sh fail2ban.sh firewall.sh swap.sh nginx.sh acme.sh ssl.sh cloudflare.sh tunnel.sh ssh.sh cache.sh utilities.sh cron.sh menu.sh; do
+  for file in core.sh system.sh updates.sh sites.sh laravel.sh php.sh backups.sh config_backups.sh db.sh db_manage.sh rename.sh fail2ban.sh firewall.sh swap.sh nginx.sh acme.sh ssl.sh cloudflare.sh tunnel.sh ssh.sh cache.sh utilities.sh cron.sh menu.sh; do
     install -m 0644 -- "$KW_UPGRADE_ROOT/src/$file" "$stage/src/$file" || return 1
   done
   install -m 0644 -- "$KW_UPGRADE_ROOT/scripts/restore_source.py" "$stage/scripts/restore_source.py" || return 1

@@ -485,6 +485,16 @@ kw_php_site_http_probe() {
     --write-out '%{http_code}' "$scheme://$domain/index.php"
 }
 
+kw_php_site_has_front_controller() {
+  local current="$KW_SITE_ROOT/deploy/current" target=''
+  [[ -f $KW_SITE_PUBLIC/index.php && ! -L $KW_SITE_PUBLIC/index.php ]] && return 0
+  [[ -L $current ]] || return 1
+  target=$(readlink -- "$current") || return 1
+  [[ $target == releases/* && $target != *..* &&
+     -f $KW_SITE_ROOT/deploy/$target/public/index.php &&
+     ! -L $KW_SITE_ROOT/deploy/$target/public/index.php ]]
+}
+
 kw_php_switch_plan() {
   local domain=${1,,} version=$2
   kw_php_version_supported "$version" || return 2
@@ -511,7 +521,7 @@ kw_php_switch_locked() (
   systemctl is-active --quiet "php${old}-fpm" || return 2
   systemctl is-active --quiet "php${version}-fpm" || return 2
   "php-fpm${old}" -t >/dev/null 2>&1 && "php-fpm${version}" -t >/dev/null 2>&1 || return 2
-  if [[ -f $KW_SITE_PUBLIC/index.php && ! -L $KW_SITE_PUBLIC/index.php ]]; then
+  if kw_php_site_has_front_controller; then
     baseline_status=$(kw_php_site_http_probe "$domain") || baseline_status=''
   fi
   kw_php_backup_file "$old_pool" "pool-${KW_SITE_OWNER#kw}" || return 1
@@ -542,7 +552,7 @@ kw_php_switch_locked() (
   meta_changed=1
   kw_site_lookup "$domain" || return 1
   [[ $KW_SITE_PHP == "$version" ]] || return 1
-  if [[ -f $KW_SITE_PUBLIC/index.php && ! -L $KW_SITE_PUBLIC/index.php ]]; then
+  if kw_php_site_has_front_controller; then
     post_status=$(kw_php_site_http_probe "$domain") || post_status=''
     for ((attempt=0; attempt<2; attempt++)); do
       [[ -z $post_status || $post_status =~ ^5[0-9][0-9]$ ]] || break
