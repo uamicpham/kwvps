@@ -6,7 +6,7 @@ Sau khi cài, lệnh mở menu là `kwvps`.
 
 ## Trạng thái
 
-KwVPS 0.50.5 hỗ trợ API token Cloudflare riêng theo zone (kể cả các tài khoản khác nhau) và sửa rate limit Nginx local khi VPS chưa tạo thư mục Cloudflare. Xem [ghi chú phát hành](docs/RELEASE-NOTES-0.50.5.md), [bảng trạng thái](docs/TRANG-THAI-CHUC-NANG.md) và [lịch sử release](https://github.com/uamicpham/kwvps/releases).
+Phiên bản `0.50.6` dùng API token Cloudflare riêng theo site; backup cấu hình domain có thể kèm token mã hóa bằng mật khẩu. Xem [ghi chú phát hành 0.50.6](docs/RELEASE-NOTES-0.50.6.md), [bảng trạng thái](docs/TRANG-THAI-CHUC-NANG.md) và [lịch sử release](https://github.com/uamicpham/kwvps/releases). Bản công khai mới nhất chỉ thay đổi sau khi GitHub Release xuất bản thành công.
 
 Quản lý Sites có tạo, đổi tên miền HTTP nguyên bản, clone source/code, xóa với hai lựa chọn giữ vùng phục hồi/xóa sạch và phân lại quyền. Menu Backup có phục hồi hoặc xóa sạch gói site đã giữ. Tunnel/route thật đã được thử trên VPS lab; đổi tên site không tự cập nhật DNS/route Cloudflare hoặc URL ứng dụng. Các thao tác không xóa dùng xác nhận `y/N`; xóa yêu cầu gõ lại đối tượng. **Không cài đè lên VPS LarVPS, web stack có sẵn hoặc máy chứa website/dữ liệu.**
 
@@ -77,7 +77,7 @@ Với VPS thử nghiệm **đã cài KwVPS**, kiểm tra bản mã mới bằng 
 - Nginx: phục hồi vhost HTTP gốc của site KwVPS và áp baseline global (`server_tokens off`, giới hạn body 32 MB). Có bản sao root-only và kiểm tra cấu hình/reload; từ chối ghi đè vhost có SSL.
 - Cron: xem `/etc/crontab` và crontab của root; mở crontab root bằng nano sau khi lưu bản sao root-only. Không tự chỉnh file trong `/etc/cron.d`.
 
-GitHub Release công khai đã hoạt động; menu Update dùng đường GitHub sau khi cấu hình `uamicpham/kwvps` trong menu. Tự đẩy IP vi phạm từ log Nginx lên Cloudflare và Real IP qua Tunnel vẫn cần kiểm thử đầy đủ. Tunnel/route thật đã trả HTTPS 200; inbound 80/443 đóng và gia hạn HTTP-01 qua Tunnel đã thử. Cloudflare Rate Limiting Free mới qua API dry-run, chưa tạo rule thật. SSH đổi port/key-only tạm gác; ionCube chưa thử loader thật. Backup cấu hình domain không gồm source, DB, SSL private key hay token Cloudflare. Các menu còn thiếu hiển thị rõ giới hạn.
+GitHub Release công khai đã hoạt động; menu Update dùng đường GitHub sau khi cấu hình `uamicpham/kwvps` trong menu. Tự đẩy IP vi phạm từ log Nginx lên Cloudflare và Real IP qua Tunnel vẫn cần kiểm thử đầy đủ. Rate limit Nginx đã trả HTTP 429 trong phép thử loopback, nhưng phép thử này không xác nhận đẩy IP lên Cloudflare. Tunnel/route thật đã trả HTTPS 200; inbound 80/443 đóng và gia hạn HTTP-01 qua Tunnel đã thử. Cloudflare Rate Limiting Free mới qua API dry-run, chưa tạo rule thật. SSH đổi port/key-only tạm gác; ionCube chưa thử loader thật. Phiên bản 0.50.6 lưu API token Cloudflare theo từng site và tự tìm Zone ID bằng token vừa nhập; backup cấu hình domain có thêm Zone ID và token site mã hóa nếu đã cấu hình. Backup vẫn không gồm source, DB, SSL private key, ingress, rate limit, cron hay cấu hình toàn VPS. Các menu còn thiếu hiển thị rõ giới hạn.
 
 ## Kiểm thử
 

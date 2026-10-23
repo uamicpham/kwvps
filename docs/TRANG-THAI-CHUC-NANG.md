@@ -33,4 +33,4 @@ Site mới dùng ID là tên domain viết thường, bỏ dấu chấm và dấ
 
 - Tunnel là chế độ theo từng site (`tunnel` hoặc `dns`); khi cloudflared chạy, site chưa phân loại ở trạng thái `unknown` để chặn Nginx local limit/bridge IP an toàn.
 - Bridge log Nginx → Cloudflare IP Access rule đã có mã và timer, mặc định tắt; chưa kiểm thử API ghi/xóa rule trên VPS.
-- Backup cấu hình hiện vẫn là bản hẹp (metadata/pool/vhost), **không** phải gói chuyển VPS. Chưa chứa source, chứng chỉ/khóa, rate limit, token/Zone ID, cron hoặc route Cloudflare. Đổi tên miền vẫn chỉ hỗ trợ HTTP mẫu; hiện từ chối site có trạng thái ingress/rate/Zone ID để tránh bỏ sót cấu hình.
+- Backup cấu hình vẫn là bản hẹp (metadata/pool/vhost và, từ 0.50.6, Zone ID/token site mã hóa nếu có), **không** phải gói chuyển VPS. Chưa chứa source, chứng chỉ/khóa, rate limit, cron hoặc route Cloudflare. Đổi tên miền chỉ hỗ trợ HTTP mẫu; từ chối site có trạng thái ingress/rate/Zone ID/token để tránh bỏ sót cấu hình.

@@ -56,7 +56,7 @@ upgrade_preflight() {
 }
 
 upgrade_check() {
-  local installed_version
+  local installed_version push_state
   upgrade_preflight || return 2
   printf 'Bản đang cài: '
   /opt/kwvps/kwvps --version
@@ -72,6 +72,11 @@ upgrade_check() {
   fi
   printf 'Chỉ thay bộ mã ở /opt/kwvps; không sửa site, cấu hình Nginx/PHP, database hoặc firewall.\n'
   printf 'Bản cũ sẽ được giữ tại /opt/kwvps-previous-<thời gian>-<ngẫu nhiên>.\n'
+  for push_state in /etc/kwvps/cloudflare/antiddos/*.push; do
+    [[ -e $push_state || -L $push_state ]] || continue
+    printf 'LƯU Ý: bridge đẩy IP lên Cloudflare cần token riêng theo site ở bản mới. Site chưa có token riêng sẽ tạm dừng bridge sau nâng cấp; rate limit Nginx local vẫn giữ nguyên.\n'
+    break
+  done
 }
 
 upgrade_apply_locked() {

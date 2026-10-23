@@ -34,7 +34,7 @@ kw_site_rename_plan() {
 }
 
 kw_site_rename_preflight() {
-  local old=$1 new=$2 old_id new_id old_owner old_root old_pool old_vhost old_meta old_link php file name zone_cache rate_state digest root_cron cron_status=0 ingress ingress_file new_ingress_file old_local_rate new_local_rate rate_value
+  local old=$1 new=$2 old_id new_id old_owner old_root old_pool old_vhost old_meta old_link php file name zone_cache site_token rate_state digest root_cron cron_status=0 ingress ingress_file new_ingress_file old_local_rate new_local_rate rate_value
   ((EUID == 0)) && kw_os_supported '' || return 2
   [[ -f /etc/kwvps/install-id && ! -L /etc/kwvps/install-id && $(< /etc/kwvps/install-id) == kwvps-v1 ]] || return 2
   kw_site_lookup "$old" || return 2
@@ -48,10 +48,11 @@ kw_site_rename_preflight() {
   digest=$(printf '%s' "$old" | sha256sum) || return 2
   digest=${digest%% *}
   zone_cache="/etc/kwvps/cloudflare/zone-${digest}.id"
+  site_token="/etc/kwvps/cloudflare/site-token-${digest}"
   rate_state="/etc/kwvps/cloudflare/kwvps-rate-${digest:0:16}.state"
   for file in \
     "/etc/kwvps/cloudflare/antiddos/$old.push" \
-    "$zone_cache" "$rate_state"; do
+    "$zone_cache" "$site_token" "$rate_state"; do
     [[ ! -e $file && ! -L $file ]] || {
       kw_log ERROR "Đổi tên chưa hỗ trợ tài nguyên phụ thuộc: $file. Giữ nguyên site để tránh cấu hình cũ sót lại."
       return 2

@@ -1,6 +1,6 @@
 # Chuyển site KwVPS sang VPS khác — thiết kế đang triển khai
 
-Backup cấu hình hiện tại **chưa** là gói chuyển VPS. Nó chỉ chứa metadata site, PHP pool và Nginx vhost. Không dùng bản này với kỳ vọng khôi phục website hoàn chỉnh trên máy mới.
+Backup cấu hình hiện tại **chưa** là gói chuyển VPS. Nó chứa metadata site, PHP pool, Nginx vhost và từ 0.50.6 có thể kèm Zone ID/token Cloudflare riêng của site trong file mã hóa. Nó chưa chứa source, DB, SSL, Tunnel, cron hay rate limit; không dùng bản này với kỳ vọng khôi phục website hoàn chỉnh trên máy mới.
 
 Gói chuyển VPS mới phải được mã hóa bằng mật khẩu người dùng tự đặt và có kiểm tra toàn vẹn. Gói cần chứa source/code (bao gồm `.env`), cấu hình site, PHP pool, Nginx, SSL/private key, trạng thái ingress, rate limit, Zone ID, Cloudflare API token, Tunnel token, các thiết lập cache liên quan và bản crontab để khôi phục. Database/dump không nằm trong gói; người dùng khôi phục DB riêng. Bí mật không được in ra menu/log hoặc lưu trong Git.
 

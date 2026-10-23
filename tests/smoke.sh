@@ -197,6 +197,20 @@ reject kw_backup_source example.com wrong-domain
 assert kw_backup_basename_valid 'source-123456789abc-20261021T102500Z-Ab12Cd34.tar.gz'
 assert kw_config_backup_name_valid 'config-123456789abc-20261021T102500Z-Ab12Cd34.tar.gz'
 reject kw_config_backup_name_valid '../../etc/shadow'
+assert kw_config_secret_password_valid 'sixteen-characters'
+reject kw_config_secret_password_valid short
+assert kw_config_zone_manifest_valid $'example.com\n0123456789abcdef0123456789abcdef'
+reject kw_config_zone_manifest_valid $'example.com\n0123456789abcdef0123456789abcdef\nother.com'
+output=$(kw_catalog cf-token)
+assert test "${output#*'Thêm/thay token theo site|cf-site-token-save'}" != "$output"
+assert test "${output#*'token chung'}" = "$output"
+output=$(kw_cf_site_token_path blog.example.com)
+assert test "${output#/etc/kwvps/cloudflare/site-token-}" != "$output"
+reject kw_cf_site_token_path 'blog.example.com/../other'
+reject kw_cf_site_token_save blog.example.com cfut_123456789012345678901234567890 WRONG
+output=$(printf '%s\n' '{"success":true,"result":[{"name":"example.com","id":"0123456789abcdef0123456789abcdef"}]}' | kw_cf_json_zone_match example.com)
+assert test "$output" = 0123456789abcdef0123456789abcdef
+reject kw_cf_json_zone_match other.com <<< '{"success":true,"result":[{"name":"example.com","id":"0123456789abcdef0123456789abcdef"}]}'
 reject kw_config_backup example.com wrong.example.com
 reject kw_config_restore example.com config-123456789abc-20261021T102500Z-Ab12Cd34.tar.gz wrong.example.com
 reject kw_backup_basename_valid '../../etc/shadow'
@@ -234,4 +248,16 @@ output=$(kw_backup_source_plan EXAMPLE.COM)
 assert test "${output#*'Domain: example.com'}" != "$output"
 assert test "${output#*"source-$site_id-"}" != "$output"
 assert test "${output#*'không gồm database'}" != "$output"
+output=$(
+  mktemp() { command mktemp "$(pwd)/.cf-discover-test.XXXXXXXX"; }
+  curl() {
+    case "${*: -1}" in
+      *'name=blog.example.com&per_page=1') printf '%s\n' '{"success":true,"result":[]}' ;;
+      *'name=example.com&per_page=1') printf '%s\n' '{"success":true,"result":[{"name":"example.com","id":"0123456789abcdef0123456789abcdef"}]}' ;;
+      *) return 99 ;;
+    esac
+  }
+  kw_cf_zone_discover blog.example.com cfut_123456789012345678901234567890
+)
+assert test "$output" = 0123456789abcdef0123456789abcdef
 printf 'PASS: %d checks\n' "$tests"

@@ -175,26 +175,9 @@ setup() {
   kw_cf_security_current() { printf 'medium'; }
   run kw_cf_under_attack_interactive <<< '0'
   [ "$status" -eq 0 ]
-  [[ "$output" == *'Zone ID đã lưu'* ]]
+  [[ "$output" == *'Zone ID của'* ]]
   [[ "$output" != *'Zone ID Cloudflare (32'* ]]
   [[ "$output" == *'ảnh hưởng MỌI hostname'* ]]
-}
-
-@test "zone discovery finds the most specific accessible parent zone" {
-  kw_cf_api() {
-    case "$2" in
-      'zones?name=blog.example.com') printf '%s\n' '{"success":true,"result":[]}' ;;
-      'zones?name=example.com') printf '%s\n' '{"success":true,"result":[{"name":"example.com","id":"0123456789abcdef0123456789abcdef"}]}' ;;
-      *) return 2 ;;
-    esac
-  }
-  kw_cf_zone_discover blog.example.com
-  [ "$KW_CF_ZONE_ID" = 0123456789abcdef0123456789abcdef ]
-}
-
-@test "zone discovery rejects an invalid or ambiguous Cloudflare response" {
-  run kw_cf_json_zone_id example.com <<< '{"success":true,"result":[{"name":"example.com","id":"bad"}]}'
-  [ "$status" -eq 2 ]
 }
 
 @test "Cloudflare token input validation accepts API token shape and rejects injection" {
@@ -205,38 +188,75 @@ setup() {
   ! kw_cf_token_valid 'cfut_bad;id'
 }
 
-@test "Cloudflare token cannot be saved without explicit internal confirmation" {
-  test_token="cfut_$(printf 'a%.0s' {1..30})"
-  run kw_cf_token_save "$test_token" WRONG
-  [ "$status" -eq 2 ]
-}
-
-@test "zone token path validates Zone ID and zone save requires confirmation" {
-  run kw_cf_zone_token_path 0123456789abcdef0123456789abcdef
+@test "site token path validates domain and site save requires confirmation" {
+  run kw_cf_site_token_path example.com
   [ "$status" -eq 0 ]
-  [ "$output" = /etc/kwvps/cloudflare/token-0123456789abcdef0123456789abcdef ]
-  run kw_cf_zone_token_path 'bad/../id'
+  [[ "$output" == /etc/kwvps/cloudflare/site-token-* ]]
+  run kw_cf_site_token_path 'bad/../id'
   [ "$status" -eq 2 ]
-  run kw_cf_zone_token_save example.com 0123456789abcdef0123456789abcdef cfut_123456789012345678901234567890 WRONG
+  run kw_cf_site_token_save example.com cfut_123456789012345678901234567890 WRONG
   [ "$status" -eq 2 ]
 }
 
-@test "Cloudflare API reads the zone-specific token without exposing another zone" {
-  kw_cf_zone_token_path() { printf '%s/token-%s\n' "$BATS_TEST_TMPDIR" "$1"; }
+@test "Cloudflare API reads only the selected site's token" {
+  kw_cf_site_token_path() { printf '%s/token-%s\n' "$BATS_TEST_TMPDIR" "$1"; }
   stat() { printf '0:600\n'; }
-  printf 'zone_token_1234567890123456789012\n' > "$BATS_TEST_TMPDIR/token-0123456789abcdef0123456789abcdef"
-  run kw_cf_token_read 0123456789abcdef0123456789abcdef
+  printf 'site_token_1234567890123456789012\n' > "$BATS_TEST_TMPDIR/token-example.com"
+  run kw_cf_token_read example.com
   [ "$status" -eq 0 ]
-  [ "$output" = zone_token_1234567890123456789012 ]
-  run kw_cf_token_read abcdef0123456789abcdef0123456789
+  [ "$output" = site_token_1234567890123456789012 ]
+  run kw_cf_token_read other.com
   [ "$status" -eq 2 ]
   [[ "$output" == *'Thiếu API token'* ]]
+}
+
+@test "Zone ID discovery uses the supplied site token before any Zone ID is known" {
+  mktemp() { command mktemp "$BATS_TEST_TMPDIR/cf.XXXXXXXX"; }
+  curl() {
+    case "${*: -1}" in
+      *'name=blog.example.com&per_page=1') printf '%s\n' '{"success":true,"result":[]}' ;;
+      *'name=example.com&per_page=1') printf '%s\n' '{"success":true,"result":[{"name":"example.com","id":"0123456789abcdef0123456789abcdef"}]}' ;;
+      *) return 99 ;;
+    esac
+  }
+  run kw_cf_zone_discover blog.example.com cfut_123456789012345678901234567890
+  [ "$status" -eq 0 ]
+  [ "$output" = 0123456789abcdef0123456789abcdef ]
 }
 
 @test "Cloudflare token help names the menu without exposing a token" {
   run kw_cf_token_help
   [ "$status" -eq 0 ]
-  [[ "$output" == *'Thêm/thay token theo zone'* ]]
+  [[ "$output" == *'Thêm/thay token theo site'* ]]
+}
+
+@test "limit push asks for a site token before touching Zone ID" {
+  kw_cf_token_read() {
+    kw_log ERROR "Thiếu API token cho site $1."
+    kw_cf_token_help >&2
+    return 2
+  }
+  kw_cf_zone_cache_read() { printf 'SHOULD NOT READ ZONE\n'; return 1; }
+  kw_cf_zone_discover() { printf 'SHOULD NOT DISCOVER ZONE\n'; return 1; }
+  run kw_cf_limit_push_interactive webgamelau.net enable
+  [ "$status" -eq 2 ]
+  [[ "$output" == *'Thêm/thay token theo site'* ]]
+  [[ "$output" != *'SHOULD NOT'* ]]
+  [[ "$output" != *'Zone ID (32'* ]]
+}
+
+@test "limit push offers manual Zone ID only after a site token cannot discover it" {
+  kw_cf_token_read() { printf 'cfut_123456789012345678901234567890\n'; }
+  kw_cf_zone_cache_read() { return 1; }
+  kw_cf_zone_discover() { return 1; }
+  kw_cf_zone_for_domain() { KW_CF_ZONE_NAME=webgamelau.net; }
+  kw_cf_zone_cache_save() { printf 'ZONE SAVED\n'; }
+  run kw_cf_limit_push_interactive webgamelau.net enable <<< $'0123456789abcdef0123456789abcdef\nn'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'Đã có token cho webgamelau.net'* ]]
+  [[ "$output" == *'Zone ID (32 ký tự hex'* ]]
+  [[ "$output" == *'ZONE SAVED'* ]]
+  [[ "$output" == *'TOÀN ZONE webgamelau.net'* ]]
 }
 
 @test "Cloudflare token submenu has status add and instructions" {
@@ -244,6 +264,7 @@ setup() {
   run kw_catalog cf-token
   [ "$status" -eq 0 ]
   [[ "$output" == *'Trạng thái API token|cf-token-status'* ]]
-  [[ "$output" == *'Thêm/thay token theo zone|cf-zone-token-save'* ]]
+  [[ "$output" == *'Thêm/thay token theo site|cf-site-token-save'* ]]
   [[ "$output" == *'Hướng dẫn lấy token và cấp quyền|cf-token-guide'* ]]
+  [[ "$output" != *'token chung'* ]]
 }

@@ -7,6 +7,7 @@ old log cannot trigger a mass ban when this feature is enabled.
 """
 import fcntl
 import datetime
+import hashlib
 import ipaddress
 import json
 import os
@@ -23,7 +24,6 @@ from pathlib import Path
 BASE = Path('/etc/kwvps/cloudflare')
 STATE = BASE / 'antiddos'
 DB = BASE / 'limit-ban.sqlite3'
-TOKEN = BASE / 'token'
 REALIP = Path('/etc/nginx/conf.d/kwvps-cloudflare-realip.conf')
 LOCK = Path('/run/lock/kwvps-cf-limit-ban.lock')
 DOMAIN = re.compile(r'^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$')
@@ -43,16 +43,35 @@ def owned_file(path, mode=None):
         raise ValueError(f'Unsafe file: {path}')
 
 
-def token_for_zone(zone):
-    if not ZONE.fullmatch(zone):
-        raise ValueError('Invalid Zone ID')
-    per_zone = BASE / ('token-' + zone.lower())
-    path = per_zone if per_zone.exists() or per_zone.is_symlink() else TOKEN
+def token_for_site(domain, zone):
+    if not DOMAIN.fullmatch(domain) or not ZONE.fullmatch(zone):
+        raise ValueError('Invalid site or Zone ID')
+    digest = hashlib.sha256(domain.encode('ascii')).hexdigest()
+    cached = BASE / ('zone-' + digest + '.id')
+    owned_file(cached, 0o600)
+    cached_lines = cached.read_text().splitlines()
+    if len(cached_lines) != 2 or cached_lines[0] != domain or cached_lines[1].lower() != zone.lower():
+        raise ValueError('Site/Zone ID mismatch')
+    path = BASE / ('site-token-' + digest)
     owned_file(path, 0o600)
     token = path.read_text().strip()
     if not re.fullmatch(r'[A-Za-z0-9._-]{20,256}', token):
         raise ValueError('Invalid Cloudflare token')
     return token
+
+
+def site_token_configured(domain, zone):
+    """Skip legacy push opt-ins until a validated per-site token is saved."""
+    digest = hashlib.sha256(domain.encode('ascii')).hexdigest()
+    path = BASE / ('site-token-' + digest)
+    if not path.exists() and not path.is_symlink():
+        print(f'Skipping {domain}: no per-site Cloudflare token; configure it in the KwVPS Cloudflare API token menu',
+              file=sys.stderr)
+        return False
+    # A dangling symlink, wrong owner/mode, invalid token, or mismatched zone
+    # must fail closed instead of being treated as an ordinary missing token.
+    token_for_site(domain, zone)
+    return True
 
 
 def api(token, method, path, payload=None):
@@ -115,6 +134,8 @@ def configs():
                             check=False).returncode == 0:
             # Unclassified site on a VPS with an active connector is unsafe.
             continue
+        if not site_token_configured(domain, zone):
+            continue
         result.append((domain, site, zone))
     return result
 
@@ -150,28 +171,35 @@ def scan(conn, domain, site, zone, edges, now):
                 continue
             if not ip.is_global or any(ip in net for net in edges):
                 continue
-            conn.execute('INSERT INTO hits(zone, ip, at) VALUES(?,?,?)', (zone, str(ip), event))
+            conn.execute('INSERT INTO hits(zone, domain, ip, at) VALUES(?,?,?,?)', (zone, domain, str(ip), event))
         end = stream.tell()
     conn.execute('INSERT OR REPLACE INTO offsets(site,inode,offset) VALUES(?,?,?)', (site, st.st_ino, end))
 
 
 def reconcile(conn, now):
-    for zone, ip, rule_id in conn.execute('SELECT zone,ip,rule_id FROM bans WHERE expires<=?', (now,)).fetchall():
+    for zone, domain, ip, rule_id in conn.execute('SELECT zone,domain,ip,rule_id FROM bans WHERE expires<=?', (now,)).fetchall():
+        if not domain:
+            print(f'Legacy ban {ip} in {zone} has no site token; manual Cloudflare cleanup required', file=sys.stderr)
+            continue
         try:
-            api(token_for_zone(zone), 'DELETE', f'zones/{zone}/firewall/access_rules/rules/{rule_id}')
-        except RuntimeError as error:
+            api(token_for_site(domain, zone), 'DELETE', f'zones/{zone}/firewall/access_rules/rules/{rule_id}')
+        except (RuntimeError, ValueError, OSError) as error:
             print(f'Could not expire ban {ip}: {error}', file=sys.stderr)
             continue
         conn.execute('DELETE FROM bans WHERE zone=? AND ip=?', (zone, ip))
     conn.execute('DELETE FROM hits WHERE at<?', (now - WINDOW,))
 
 
-def ban_candidates(conn, now):
-    candidates = conn.execute('''SELECT zone,ip,COUNT(*) AS n FROM hits
-        WHERE at>=? GROUP BY zone,ip HAVING n>=? ORDER BY n DESC LIMIT ?''',
+def ban_candidates(conn, now, active):
+    candidates = conn.execute('''SELECT zone,domain,ip,COUNT(*) AS n FROM hits
+        WHERE at>=? GROUP BY zone,domain,ip HAVING n>=? ORDER BY n DESC LIMIT ?''',
         (now - WINDOW, THRESHOLD, MAX_NEW_PER_RUN)).fetchall()
-    for zone, ip, count in candidates:
-        token = token_for_zone(zone)
+    for zone, domain, ip, count in candidates:
+        if (domain, zone.lower()) not in active:
+            # A pre-upgrade hit cannot trigger a write after its site was
+            # skipped for a missing per-site token or disabled push state.
+            continue
+        token = token_for_site(domain, zone)
         if conn.execute('SELECT 1 FROM bans WHERE zone=? AND ip=?', (zone, ip)).fetchone():
             continue
         if conn.execute('SELECT COUNT(*) FROM bans WHERE zone=?', (zone,)).fetchone()[0] >= MAX_ACTIVE_PER_ZONE:
@@ -186,7 +214,8 @@ def ban_candidates(conn, now):
         rule_id = result.get('id') if isinstance(result, dict) else None
         if not isinstance(rule_id, str) or not ZONE.fullmatch(rule_id):
             raise RuntimeError('Cloudflare created a rule but did not return a valid ID; inspect dashboard')
-        conn.execute('INSERT INTO bans(zone,ip,rule_id,expires) VALUES(?,?,?,?)', (zone, ip, rule_id, now + TTL))
+        conn.execute('INSERT INTO bans(zone,domain,ip,rule_id,expires) VALUES(?,?,?,?,?)',
+                     (zone, domain, ip, rule_id, now + TTL))
         conn.execute('DELETE FROM hits WHERE zone=? AND ip=?', (zone, ip))
         print(f'Cloudflare blocked {ip} in zone {zone} for {TTL}s')
 
@@ -194,9 +223,9 @@ def ban_candidates(conn, now):
 def main():
     if os.geteuid() != 0:
         raise ValueError('root required')
-    if len(sys.argv) == 3 and sys.argv[1] == '--check-zone':
-        zone = sys.argv[2]
-        api(token_for_zone(zone), 'GET', f'zones/{zone}/firewall/access_rules/rules?per_page=1')
+    if len(sys.argv) == 4 and sys.argv[1] == '--check-zone':
+        domain, zone = sys.argv[2:]
+        api(token_for_site(domain, zone), 'GET', f'zones/{zone}/firewall/access_rules/rules?per_page=1')
         print('Cloudflare IP Access read OK; write permission still requires a live trial')
         return
     if len(sys.argv) != 1:
@@ -212,14 +241,23 @@ def main():
         with sqlite3.connect(DB) as conn:
             os.chmod(DB, 0o600)
             conn.executescript('''CREATE TABLE IF NOT EXISTS offsets(site TEXT PRIMARY KEY,inode INTEGER,offset INTEGER);
-                CREATE TABLE IF NOT EXISTS hits(zone TEXT,ip TEXT,at INTEGER);
-                CREATE TABLE IF NOT EXISTS bans(zone TEXT,ip TEXT,rule_id TEXT,expires INTEGER,
+                CREATE TABLE IF NOT EXISTS hits(zone TEXT,domain TEXT,ip TEXT,at INTEGER);
+                CREATE TABLE IF NOT EXISTS bans(zone TEXT,domain TEXT,ip TEXT,rule_id TEXT,expires INTEGER,
                 PRIMARY KEY(zone,ip));''')
+            for table in ('hits', 'bans'):
+                columns = {row[1] for row in conn.execute(f'PRAGMA table_info({table})')}
+                if 'domain' not in columns:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN domain TEXT NOT NULL DEFAULT ''")
+            conn.execute("DELETE FROM hits WHERE domain='' ")
+            for zone, in conn.execute("SELECT DISTINCT zone FROM bans WHERE domain=''").fetchall():
+                matching = [domain for domain, _, site_zone in active if site_zone.lower() == zone.lower()]
+                if len(matching) == 1:
+                    conn.execute("UPDATE bans SET domain=? WHERE zone=? AND domain=''", (matching[0], zone))
             now = int(time.time())
             for domain, site, zone in active:
                 scan(conn, domain, site, zone, edges, now)
             reconcile(conn, now)
-            ban_candidates(conn, now)
+            ban_candidates(conn, now, {(domain, zone.lower()) for domain, _, zone in active})
 
 
 if __name__ == '__main__':

@@ -2,7 +2,7 @@
 
 ## Trạng thái
 
-KwVPS [0.50.3 đã phát hành](https://github.com/uamicpham/kwvps/releases/tag/v0.50.3) tại `uamicpham/kwvps`. README có lệnh cài ngắn tự lấy release mới nhất và lệnh ghim tag/checksum để kiểm soát chặt hơn. VPS đã cài có thể chọn **Quản lý Update → Kiểm tra / cập nhật KwVPS**; gói được xác minh bằng SHA-256 từ GitHub API trước khi áp dụng. Bản cài mới chỉ hỗ trợ VPS Ubuntu Server 24.04 sạch, x86_64 và systemd; không cài đè LarVPS hay web stack khác.
+Phiên bản phát hành kế tiếp là [0.50.6](RELEASE-NOTES-0.50.6.md), sau bản [0.50.5](https://github.com/uamicpham/kwvps/releases/tag/v0.50.5) tại `uamicpham/kwvps`. Chỉ coi 0.50.6 là bản công khai sau khi workflow tạo GitHub Release và tài sản tải về thành công. README có lệnh cài ngắn tự lấy release mới nhất và lệnh ghim tag/checksum để kiểm soát chặt hơn. VPS đã cài có thể chọn **Quản lý Update → Kiểm tra / cập nhật KwVPS**; gói được xác minh bằng SHA-256 từ GitHub API trước khi áp dụng. Bản cài mới chỉ hỗ trợ VPS Ubuntu Server 24.04 sạch, x86_64 và systemd; không cài đè LarVPS hay web stack khác.
 
 ## Chuẩn bị GitHub
 
@@ -12,13 +12,13 @@ KwVPS [0.50.3 đã phát hành](https://github.com/uamicpham/kwvps/releases/tag/
 
 ## Đóng gói
 
-Sau khi kiểm thử và đổi `KW_VERSION` thành `x.y.z` ổn định, chạy trên Linux:
+Sau khi kiểm thử và đổi `KW_VERSION` thành `x.y.z` ổn định, có thể kiểm tra gói cục bộ trên Linux:
 
 ```bash
 bash scripts/package-release.sh owner/repo
 ```
 
-Script đóng gói theo danh sách file cho phép vào `dist/kwvps-x.y.z.tar.gz`, kèm `dist/kwvps-x.y.z.tar.gz.sha256`. Nó từ chối ghi đè gói đã có. Tạo GitHub Release với tag `vx.y.z` và tải chính xác archive này lên. Kiểm tra SHA-256 của asset trên GitHub khớp file local.
+Script đóng gói theo danh sách file cho phép vào `dist/kwvps-x.y.z.tar.gz`, kèm `dist/kwvps-x.y.z.tar.gz.sha256`. Nó từ chối ghi đè gói đã có. Khi đẩy tag `vx.y.z`, workflow `.github/workflows/release.yml` kiểm tra version, chạy test và ShellCheck, đóng gói rồi tự tạo GitHub Release với hai asset trên và `docs/RELEASE-NOTES-x.y.z.md`. Không cần tải asset thủ công nếu workflow thành công. Kiểm tra lại release, tài sản tải về và SHA-256 trên GitHub trước khi đưa lệnh cài cho người dùng.
 
 ## Lệnh cài một dòng
 
