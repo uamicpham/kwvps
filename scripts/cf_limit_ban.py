@@ -43,6 +43,18 @@ def owned_file(path, mode=None):
         raise ValueError(f'Unsafe file: {path}')
 
 
+def token_for_zone(zone):
+    if not ZONE.fullmatch(zone):
+        raise ValueError('Invalid Zone ID')
+    per_zone = BASE / ('token-' + zone.lower())
+    path = per_zone if per_zone.exists() or per_zone.is_symlink() else TOKEN
+    owned_file(path, 0o600)
+    token = path.read_text().strip()
+    if not re.fullmatch(r'[A-Za-z0-9._-]{20,256}', token):
+        raise ValueError('Invalid Cloudflare token')
+    return token
+
+
 def api(token, method, path, payload=None):
     data = None if payload is None else json.dumps(payload).encode('utf-8')
     req = urllib.request.Request('https://api.cloudflare.com/client/v4/' + path,
@@ -143,10 +155,10 @@ def scan(conn, domain, site, zone, edges, now):
     conn.execute('INSERT OR REPLACE INTO offsets(site,inode,offset) VALUES(?,?,?)', (site, st.st_ino, end))
 
 
-def reconcile(conn, token, now):
+def reconcile(conn, now):
     for zone, ip, rule_id in conn.execute('SELECT zone,ip,rule_id FROM bans WHERE expires<=?', (now,)).fetchall():
         try:
-            api(token, 'DELETE', f'zones/{zone}/firewall/access_rules/rules/{rule_id}')
+            api(token_for_zone(zone), 'DELETE', f'zones/{zone}/firewall/access_rules/rules/{rule_id}')
         except RuntimeError as error:
             print(f'Could not expire ban {ip}: {error}', file=sys.stderr)
             continue
@@ -154,11 +166,12 @@ def reconcile(conn, token, now):
     conn.execute('DELETE FROM hits WHERE at<?', (now - WINDOW,))
 
 
-def ban_candidates(conn, token, now):
+def ban_candidates(conn, now):
     candidates = conn.execute('''SELECT zone,ip,COUNT(*) AS n FROM hits
         WHERE at>=? GROUP BY zone,ip HAVING n>=? ORDER BY n DESC LIMIT ?''',
         (now - WINDOW, THRESHOLD, MAX_NEW_PER_RUN)).fetchall()
     for zone, ip, count in candidates:
+        token = token_for_zone(zone)
         if conn.execute('SELECT 1 FROM bans WHERE zone=? AND ip=?', (zone, ip)).fetchone():
             continue
         if conn.execute('SELECT COUNT(*) FROM bans WHERE zone=?', (zone,)).fetchone()[0] >= MAX_ACTIVE_PER_ZONE:
@@ -181,15 +194,9 @@ def ban_candidates(conn, token, now):
 def main():
     if os.geteuid() != 0:
         raise ValueError('root required')
-    owned_file(TOKEN, 0o600)
-    token = TOKEN.read_text().strip()
-    if not re.fullmatch(r'[A-Za-z0-9._-]{20,256}', token):
-        raise ValueError('Invalid Cloudflare token')
     if len(sys.argv) == 3 and sys.argv[1] == '--check-zone':
         zone = sys.argv[2]
-        if not ZONE.fullmatch(zone):
-            raise ValueError('Invalid Zone ID')
-        api(token, 'GET', f'zones/{zone}/firewall/access_rules/rules?per_page=1')
+        api(token_for_zone(zone), 'GET', f'zones/{zone}/firewall/access_rules/rules?per_page=1')
         print('Cloudflare IP Access read OK; write permission still requires a live trial')
         return
     if len(sys.argv) != 1:
@@ -211,8 +218,8 @@ def main():
             now = int(time.time())
             for domain, site, zone in active:
                 scan(conn, domain, site, zone, edges, now)
-            reconcile(conn, token, now)
-            ban_candidates(conn, token, now)
+            reconcile(conn, now)
+            ban_candidates(conn, now)
 
 
 if __name__ == '__main__':

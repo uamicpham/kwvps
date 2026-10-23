@@ -29,7 +29,7 @@ kw_catalog() {
     tunnel) printf '%s\n' 'Cấu hình Tunnel|tunnel-config' 'Trạng thái service|tunnel-status' 'Restart|tunnel-restart' 'Log Tunnel|tunnel-log' 'Xem version cloudflared|tunnel-version' 'Inbound 80/443|tunnel-inbound' ;;
     advanced) printf '%s\n' 'Bảo mật/Cloudflare|@cloudflare' ;;
     cloudflare) printf '%s\n' 'Cập nhật Cloudflare Real IP|cf-realip' 'AntiDDoS theo domain|cf-antiddos' 'Bật/tắt Under Attack|cf-under-attack' 'Cấu hình API token|@cf-token' ;;
-    cf-token) printf '%s\n' 'Trạng thái API token|cf-token-status' 'Thêm hoặc thay API token|cf-token-save' 'Hướng dẫn lấy token và cấp quyền|cf-token-guide' 'Xem/lưu Zone ID theo site|cf-zone-id' ;;
+    cf-token) printf '%s\n' 'Trạng thái API token|cf-token-status' 'Thêm/thay token theo zone|cf-zone-token-save' 'Hướng dẫn lấy token và cấp quyền|cf-token-guide' 'Xem/lưu Zone ID theo site|cf-zone-id' 'Thêm/thay token chung cũ|cf-token-save' ;;
     *) return 2 ;;
   esac
 }
@@ -104,6 +104,7 @@ kw_action() {
     cf-under-attack) kw_cf_under_attack_interactive ;;
     cf-token-status) kw_cf_token_status ;;
     cf-token-save) kw_cf_token_save_interactive ;;
+    cf-zone-token-save) kw_cf_zone_token_save_interactive ;;
     cf-token-guide) kw_cf_token_guide ;;
     cf-zone-id) kw_cf_zone_id_interactive ;;
     ssh-password) kw_ssh_password_interactive ;;

@@ -108,7 +108,34 @@ kw_cf_zone_id_valid() { [[ ${1:-} =~ ^[a-fA-F0-9]{32}$ ]]; }
 kw_cf_token_valid() { [[ ${1:-} =~ ^[A-Za-z0-9._-]{20,256}$ ]]; }
 
 kw_cf_token_help() {
-  printf 'Cloudflare API token: Công cụ nâng cao → Bảo mật/Cloudflare → Cấu hình API token (mục 4).\n'
+  printf 'Cloudflare API token: Công cụ nâng cao → Bảo mật/Cloudflare → Cấu hình API token → Thêm/thay token theo zone.\n'
+}
+
+kw_cf_zone_token_path() {
+  kw_cf_zone_id_valid "${1:-}" || return 2
+  printf '/etc/kwvps/cloudflare/token-%s\n' "${1,,}"
+}
+
+kw_cf_token_read() {
+  local zone=${1:-} path token
+  if [[ -n $zone ]]; then
+    path=$(kw_cf_zone_token_path "$zone") || return 2
+    [[ -e $path || -L $path ]] || path=/etc/kwvps/cloudflare/token
+  else
+    path=/etc/kwvps/cloudflare/token
+  fi
+  [[ -f $path && ! -L $path ]] || {
+    kw_log ERROR "Thiếu API token cho zone ${zone:-tự tìm}. Lưu token theo zone trong menu Cấu hình API token."
+    kw_cf_token_help >&2
+    return 2
+  }
+  [[ $(stat -c %u:%a -- "$path") == 0:600 ]] || {
+    kw_log ERROR "Token Cloudflare không an toàn tại $path (cần root:root, 0600)."
+    return 2
+  }
+  IFS= read -r token < "$path" || return 2
+  kw_cf_token_valid "$token" || { kw_log ERROR 'Token Cloudflare không đúng định dạng.'; return 2; }
+  printf '%s\n' "$token"
 }
 
 kw_cf_token_guide() {
@@ -119,10 +146,10 @@ kw_cf_token_guide() {
     'Để tự đẩy IP bị Nginx limit lên Cloudflare: cần quyền IP Access rules Read/Write. API hiện liệt kê Account Firewall Access Rules Read/Edit; quyền Zone Firewall Services có thể không đủ.' \
     'Trong My Profile → API Tokens, mở token hiện có và chọn Edit để thêm quyền; giữ các quyền Under Attack.' \
     'Nếu Cloudflare cấp giá trị token mới, dùng mục Thêm hoặc thay API token của KwVPS để lưu lại trên VPS.' \
-    'Zone Resources: Include → Specific zone → chọn đúng zone chứa domain. Không chọn All zones nếu không cần.' \
-    'Create Token, sao chép token một lần; vào mục 2 bên dưới để dán. Không gửi token vào chat, URL hoặc mã nguồn.' \
+    'Zone Resources: Include → Specific zone → chọn đúng zone chứa domain. Mỗi zone/tài khoản Cloudflare có thể dùng token riêng.' \
+    'Create Token, sao chép token một lần; chọn Thêm/thay token theo zone để dán. Không gửi token vào chat, URL hoặc mã nguồn.' \
     'Zone ID thuộc từng zone/domain gốc, KHÔNG phải ID chung cho tài khoản. Tìm tại Cloudflare Dashboard → chọn domain gốc → Overview → Zone ID.' \
-    'KwVPS tự tìm Zone ID nếu token có Zone Read; nếu không, vào mục 4 Xem/lưu Zone ID theo site để nhập và xác minh.' \
+    'Với token riêng, nhập Zone ID thủ công khi lưu token; KwVPS xác minh zone/domain rồi lưu cả hai. Tự tìm Zone ID chỉ dùng token chung cũ.' \
     'Nginx rate limit đơn thuần không dùng token; tùy chọn đẩy IP bị limit lên Cloudflare có dùng token.' \
     'Gói Free không cho điều kiện hostname của Rate Limiting; KwVPS sẽ báo phạm vi TOÀN ZONE và hỏi y/N.' \
     'Rate Limiting đếm/chặn tại biên Cloudflare; không phải chức năng tự đưa IP từ log Nginx lên Cloudflare.' \
@@ -131,7 +158,7 @@ kw_cf_token_guide() {
 }
 
 kw_cf_token_status() {
-  local dir=/etc/kwvps/cloudflare path=/etc/kwvps/cloudflare/token
+  local dir=/etc/kwvps/cloudflare path=/etc/kwvps/cloudflare/token item found=0
   ((EUID == 0)) || { kw_log ERROR 'Cần sudo/root để xem trạng thái API token.'; return 2; }
   if [[ -e $dir || -L $dir ]]; then
     [[ -d $dir && ! -L $dir && $(stat -c %u:%a -- "$dir") == 0:700 ]] || {
@@ -139,18 +166,23 @@ kw_cf_token_status() {
       return 2
     }
   fi
-  if [[ ! -e $path && ! -L $path ]]; then
-    printf 'Chưa lưu Cloudflare API token trên VPS.\n'
-    kw_cf_token_help
-    return 0
+  if [[ -e $path || -L $path ]]; then
+    [[ -f $path && ! -L $path && $(stat -c %u:%a -- "$path") == 0:600 ]] || {
+      kw_log ERROR 'File token chung không an toàn; cần root:root và 0600.'; return 2;
+    }
+    printf 'Token chung cũ: đã lưu (không hiển thị giá trị).\n'
+    found=1
   fi
-  if [[ -f $path && ! -L $path && $(stat -c %u:%a -- "$path") == 0:600 ]]; then
-    printf 'API token đã lưu tại %s (root-only; không hiển thị giá trị).\n' "$path"
-  else
-    kw_log ERROR 'File API token không an toàn hoặc sai quyền; cần root:root và 0600.'
-    kw_cf_token_help
-    return 2
-  fi
+  for item in "$dir"/token-*; do
+    [[ -e $item || -L $item ]] || continue
+    [[ ${item##*/} =~ ^token-[a-f0-9]{32}$ && -f $item && ! -L $item &&
+       $(stat -c %u:%a -- "$item") == 0:600 ]] || {
+      kw_log ERROR "File token theo zone không an toàn: $item"; return 2;
+    }
+    printf 'Token zone %s: đã lưu (không hiển thị giá trị).\n' "${item##*/token-}"
+    found=1
+  done
+  ((found)) || { printf 'Chưa lưu API token Cloudflare trên VPS.\n'; kw_cf_token_help; }
 }
 
 kw_cf_token_verify() (
@@ -212,6 +244,58 @@ kw_cf_token_save_interactive() {
   KW_PROMPT_VALUE=''
   kw_prompt_yes_no_token 'Xác minh với Cloudflare rồi lưu/thay token trên VPS?' SAVE-CF-TOKEN || return 0
   kw_cf_token_save "$token" "$KW_PROMPT_VALUE"
+}
+
+kw_cf_zone_token_save() (
+  local domain=${1,,} zone=${2,,} token=${3:-} confirm=${4:-} dir=/etc/kwvps/cloudflare path stage config response zone_name
+  [[ $confirm == "SAVE-CF-ZONE:$domain:$zone" ]] &&
+    kw_domain_valid "$domain" && kw_cf_zone_id_valid "$zone" && kw_cf_token_valid "$token" || return 2
+  ((EUID == 0)) && kw_os_supported '' && kw_site_lookup "$domain" || return 2
+  if [[ ! -e $dir && ! -L $dir ]]; then
+    install -d -o root -g root -m 0700 -- "$dir" || return 1
+  fi
+  [[ -d $dir && ! -L $dir && $(stat -c %u:%a -- "$dir") == 0:700 ]] || {
+    kw_log ERROR 'Thư mục Cloudflare chưa an toàn; cần root:root và 0700.'; return 2;
+  }
+  kw_cf_token_verify "$token" || return 2
+  config=$(mktemp /run/kwvps-cf-verify-zone.XXXXXXXX) || return 1
+  trap 'rm -f -- "$config" "${stage:-}"' EXIT
+  chmod 0600 -- "$config" || return 1
+  printf 'header = "Authorization: Bearer %s"\n' "$token" > "$config" || return 1
+  response=$(curl -fsS --proto '=https' --tlsv1.2 --connect-timeout 8 --max-time 25 \
+    --config "$config" "https://api.cloudflare.com/client/v4/zones/$zone") || {
+      kw_log ERROR 'Token không đọc được Zone ID này; kiểm tra Zone Read và Zone Resources.'; return 2;
+    }
+  zone_name=$(printf '%s' "$response" | kw_cf_json_field zone_name) || return 2
+  [[ $domain == "$zone_name" || $domain == *".$zone_name" ]] || {
+    kw_log ERROR "Site $domain không thuộc zone $zone_name; chưa lưu token."; return 2;
+  }
+  path=$(kw_cf_zone_token_path "$zone") || return 2
+  [[ ! -e $path && ! -L $path ]] || {
+    [[ -f $path && ! -L $path && $(stat -c %u:%a -- "$path") == 0:600 ]] || return 2;
+  }
+  stage=$(mktemp "$dir/.token-zone.XXXXXXXX") || return 1
+  chmod 0600 -- "$stage" || return 1
+  printf '%s\n' "$token" > "$stage" || return 1
+  mv -T -- "$stage" "$path" || return 1
+  stage=''
+  kw_cf_zone_cache_save "$domain" "$zone" || return 2
+  printf 'Đã lưu token riêng cho zone %s (%s); không hiển thị giá trị.\n' "$zone_name" "$zone"
+)
+
+kw_cf_zone_token_save_interactive() {
+  local domain zone token
+  ((EUID == 0)) || return 2
+  kw_site_prompt_domain || return 0
+  domain=$KW_SITE_CHOICE
+  printf 'Zone ID lấy tại Cloudflare Dashboard → chọn domain gốc → Overview → Zone ID.\n'
+  kw_prompt_validated 'Zone ID (32 ký tự hex; Enter để hủy): ' kw_cf_zone_id_valid 'Zone ID không hợp lệ' plain || return 0
+  zone=$KW_PROMPT_VALUE
+  kw_prompt_validated 'Dán API token riêng cho zone (ẩn ký tự; Enter để hủy): ' kw_cf_token_valid 'Token cần 20–256 ký tự chữ/số/._-' secret || return 0
+  token=$KW_PROMPT_VALUE
+  KW_PROMPT_VALUE=''
+  kw_prompt_yes_no_token "Xác minh rồi lưu token cho $domain (zone $zone)?" "SAVE-CF-ZONE:$domain:$zone" || return 0
+  kw_cf_zone_token_save "$domain" "$zone" "$token" "$KW_PROMPT_VALUE"
 }
 
 kw_cf_zone_cache_path() {
@@ -283,10 +367,10 @@ kw_cf_level_valid() {
 }
 
 kw_cf_api() (
-  local method=$1 path=$2 body=${3:-} token config zone_name
+  local method=$1 path=$2 body=${3:-} token config zone_name zone=''
   [[ $method == GET || $method == PATCH ]] || return 2
   if [[ $path =~ ^zones/[a-fA-F0-9]{32}(/settings/security_level)?$ ]]; then
-    :
+    zone=${path#zones/}; zone=${zone%%/*}
   elif [[ $method == GET && $path =~ ^zones\?name=([a-z0-9.-]+)$ ]]; then
     zone_name=${BASH_REMATCH[1]}
     kw_domain_valid "$zone_name" || return 2
@@ -295,22 +379,7 @@ kw_cf_api() (
   fi
   [[ $method != PATCH ]] || kw_cf_level_valid "$body" || return 2
   [[ $method != PATCH || $path == */settings/security_level ]] || return 2
-  [[ -f /etc/kwvps/cloudflare/token && ! -L /etc/kwvps/cloudflare/token ]] || {
-    kw_log ERROR 'Thiếu token Cloudflare trên VPS.'
-    kw_cf_token_help
-    return 2
-  }
-  [[ $(stat -c %u:%a -- /etc/kwvps/cloudflare/token) == 0:600 ]] || {
-    kw_log ERROR 'Token Cloudflare sai chủ sở hữu/quyền file (cần root:root, 0600).'
-    kw_cf_token_help
-    return 2
-  }
-  IFS= read -r token < /etc/kwvps/cloudflare/token || return 2
-  kw_cf_token_valid "$token" || {
-    kw_log ERROR 'Token Cloudflare không đúng định dạng.'
-    kw_cf_token_help
-    return 2
-  }
+  token=$(kw_cf_token_read "$zone") || return 2
   config=$(mktemp /run/kwvps-cf-api.XXXXXXXX) || return 1
   trap 'rm -f -- "$config"' EXIT
   chmod 0600 -- "$config" || return 1
@@ -521,7 +590,7 @@ kw_cf_antiddos_explain() {
   printf '%s\n' \
     '1) Nginx local: vượt ngưỡng trả 429; không dùng cho SITE được đánh dấu Tunnel (Real IP chưa xác minh).' \
     '2) Cloudflare Rate Limiting: Cloudflare đếm theo IP khách tại biên, chỉ áp cho hostname đã chọn.' \
-    '   Cloudflare rule dùng API token chung; cần Zone WAF Read/Write.' \
+    '   Cloudflare rule dùng API token riêng theo zone (hoặc token chung cũ); cần Zone WAF Read/Write.' \
     '   Gói Free không hỗ trợ điều kiện hostname: chỉ có thể tạo rule TOÀN ZONE sau xác nhận y/N.' \
     '3) Tùy chọn riêng của Nginx local: đếm 5 lần bị 429/60 giây trong log rồi block IP 15 phút tại Cloudflare.' \
     '   Chỉ dùng cho site chế độ DNS; rule IP Access áp dụng cho TOÀN ZONE, không riêng hostname.' \
@@ -567,18 +636,31 @@ kw_cf_antiddos_apply() (
   [[ -f $kw_cf_realip_target && ! -L $kw_cf_realip_target ]] || {
     kw_log ERROR 'Trước tiên bật Cloudflare Real IP ở mục 1.'; return 2;
   }
+  if [[ ! -e /etc/kwvps/cloudflare && ! -L /etc/kwvps/cloudflare ]]; then
+    install -d -o root -g root -m 0700 -- /etc/kwvps/cloudflare || return 1
+  fi
   [[ -d /etc/kwvps/cloudflare && ! -L /etc/kwvps/cloudflare &&
-     $(stat -c %u:%a -- /etc/kwvps/cloudflare) == 0:700 ]] || return 2
-  kw_has nginx && kw_has flock && kw_has mktemp && kw_has systemctl || return 2
-  ingress=$(kw_tunnel_site_mode "$domain") || return 2
+     $(stat -c %u:%a -- /etc/kwvps/cloudflare) == 0:700 ]] || {
+    kw_log ERROR 'Thư mục /etc/kwvps/cloudflare phải thuộc root:root, quyền 0700 và không là symlink.'; return 2;
+  }
+  kw_has nginx && kw_has flock && kw_has mktemp && kw_has systemctl || {
+    kw_log ERROR 'Thiếu nginx, flock, mktemp hoặc systemctl.'; return 2;
+  }
+  ingress=$(kw_tunnel_site_mode "$domain") || {
+    kw_log ERROR 'Không đọc được chế độ DNS/Tunnel của site; kiểm tra metadata ingress.'; return 2;
+  }
   if [[ $rate != off && $ingress != dns ]]; then
     kw_log ERROR 'Site dùng Tunnel hoặc chưa phân loại ingress; chọn DNS thông thường trong menu Tunnel trước khi bật rate limit local.'
     return 2
   fi
-  nginx -t >/dev/null 2>&1 && systemctl is-active --quiet nginx || return 2
+  nginx -t && systemctl is-active --quiet nginx || {
+    kw_log ERROR 'Cấu hình Nginx hiện không hợp lệ hoặc service chưa chạy; chưa áp rate limit.'; return 2;
+  }
   exec 9>/run/lock/kwvps-cloudflare.lock || return 2
   flock -n 9 || return 1
-  ingress=$(kw_tunnel_site_mode "$domain") || return 2
+  ingress=$(kw_tunnel_site_mode "$domain") || {
+    kw_log ERROR 'Không đọc được chế độ ingress sau khi khóa; chưa áp rate limit.'; return 2;
+  }
   if [[ $rate != off && $ingress != dns ]]; then
     kw_log ERROR 'Site không còn xác nhận chế độ DNS; hủy rate limit để tránh gom mọi khách vào một IP.'
     return 2
@@ -587,7 +669,9 @@ kw_cf_antiddos_apply() (
     install -d -o root -g root -m 0700 -- "$kw_cf_antiddos_state_dir" || return 1
   fi
   [[ -d $kw_cf_antiddos_state_dir && ! -L $kw_cf_antiddos_state_dir &&
-     $(stat -c %u:%a -- "$kw_cf_antiddos_state_dir") == 0:700 ]] || return 2
+     $(stat -c %u:%a -- "$kw_cf_antiddos_state_dir") == 0:700 ]] || {
+    kw_log ERROR 'Thư mục rate limit phải thuộc root:root, quyền 0700 và không là symlink.'; return 2;
+  }
   state="$kw_cf_antiddos_state_dir/$domain.rate"
   if [[ $rate == off && -e $kw_cf_antiddos_state_dir/$domain.push ]]; then
     kw_log ERROR 'Tắt đẩy IP lên Cloudflare ở mục 7 trước khi tắt Nginx rate limit.'
@@ -615,12 +699,14 @@ kw_cf_antiddos_apply() (
     temp=''
   fi
   temp=$(mktemp /etc/nginx/conf.d/.kwvps-antiddos.XXXXXXXX) || return 1
-  kw_cf_antiddos_render > "$temp" || return 2
+  kw_cf_antiddos_render > "$temp" || {
+    kw_log ERROR 'Không dựng được cấu hình rate limit; kiểm tra các file .rate root-only, quyền 0600.'; return 2;
+  }
   chmod 0644 -- "$temp" || return 1
   mv -T -- "$temp" "$kw_cf_antiddos_conf" || return 1
   temp=''
-  nginx -t >/dev/null 2>&1 || return 1
-  systemctl reload nginx || return 1
+  nginx -t || { kw_log ERROR 'Nginx từ chối cấu hình rate limit mới; đã hoàn tác.'; return 1; }
+  systemctl reload nginx || { kw_log ERROR 'Không reload được Nginx; đã hoàn tác.'; return 1; }
   # shellcheck disable=SC2034 # Read by the EXIT rollback trap.
   committed=1
   printf 'Đã đặt giới hạn local cho %s: %s request/giây (off = tắt).\n' "$domain" "$rate"
@@ -671,7 +757,7 @@ kw_cf_limit_push_apply() (
   ingress=$(kw_tunnel_site_mode "$domain") || return 2
   [[ $ingress == dns ]] || { kw_log ERROR 'Chưa xác minh site này dùng DNS thông thường; không bật bridge Nginx.'; return 2; }
   [[ ! -e $state && ! -L $state ]] || { kw_log ERROR 'Đã bật đẩy IP cho site này.'; return 2; }
-  [[ -f /etc/kwvps/cloudflare/token && ! -L /etc/kwvps/cloudflare/token ]] || { kw_cf_token_help; return 2; }
+  kw_cf_token_read "$zone" >/dev/null || return 2
   [[ -f /etc/systemd/system/kwvps-cf-limit-ban.timer && -f /opt/kwvps/scripts/cf_limit_ban.py ]] || {
     kw_log ERROR 'Chưa cài timer/worker; nâng cấp KwVPS trước.'; return 2;
   }
@@ -828,12 +914,7 @@ kw_cf_rate_api() {
     DELETE:rule/*) [[ ${route#rule/} =~ ^[a-fA-F0-9]{32}/rules/[a-fA-F0-9]{32}$ ]] || return 2 ;;
     *) return 2 ;;
   esac
-  [[ -f /etc/kwvps/cloudflare/token && ! -L /etc/kwvps/cloudflare/token &&
-     $(stat -c %u:%a -- /etc/kwvps/cloudflare/token) == 0:600 ]] || {
-    kw_log ERROR 'Thiếu API token Cloudflare an toàn.'; kw_cf_token_help; return 2;
-  }
-  IFS= read -r token < /etc/kwvps/cloudflare/token || return 2
-  kw_cf_token_valid "$token" || return 2
+  token=$(kw_cf_token_read "$zone") || return 2
   config=$(mktemp /run/kwvps-cf-rate-config.XXXXXXXX) || return 1
   response=$(mktemp /run/kwvps-cf-rate-response.XXXXXXXX) || { rm -f -- "$config"; return 1; }
   chmod 0600 -- "$config" "$response" || return 1
@@ -1013,10 +1094,14 @@ kw_cf_rate_interactive() {
   else
     cache_status=$?
     ((cache_status == 1)) || return 2
-    kw_cf_zone_discover "$domain" || {
-      kw_log ERROR 'Không tìm được Zone ID; trước tiên cấu hình API token và kiểm tra Under Attack.'; return 2;
-    }
-    zone=$KW_CF_ZONE_ID
+    if kw_cf_zone_discover "$domain"; then
+      zone=$KW_CF_ZONE_ID
+    else
+      printf 'Không tự tìm được Zone ID; nhập ID đã gắn token riêng (Cấu hình API token → Thêm/thay token theo zone).\n'
+      kw_prompt_validated 'Zone ID (32 ký tự hex; Enter để hủy): ' kw_cf_zone_id_valid 'Zone ID không hợp lệ' plain || return 0
+      zone=$KW_PROMPT_VALUE
+      kw_cf_zone_for_domain "$domain" "$zone" || return 2
+    fi
     kw_cf_zone_cache_save "$domain" "$zone" || return 2
   fi
   kw_cf_zone_for_domain "$domain" "$zone" || return 2

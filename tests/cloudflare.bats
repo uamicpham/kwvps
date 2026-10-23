@@ -211,10 +211,32 @@ setup() {
   [ "$status" -eq 2 ]
 }
 
+@test "zone token path validates Zone ID and zone save requires confirmation" {
+  run kw_cf_zone_token_path 0123456789abcdef0123456789abcdef
+  [ "$status" -eq 0 ]
+  [ "$output" = /etc/kwvps/cloudflare/token-0123456789abcdef0123456789abcdef ]
+  run kw_cf_zone_token_path 'bad/../id'
+  [ "$status" -eq 2 ]
+  run kw_cf_zone_token_save example.com 0123456789abcdef0123456789abcdef cfut_123456789012345678901234567890 WRONG
+  [ "$status" -eq 2 ]
+}
+
+@test "Cloudflare API reads the zone-specific token without exposing another zone" {
+  kw_cf_zone_token_path() { printf '%s/token-%s\n' "$BATS_TEST_TMPDIR" "$1"; }
+  stat() { printf '0:600\n'; }
+  printf 'zone_token_1234567890123456789012\n' > "$BATS_TEST_TMPDIR/token-0123456789abcdef0123456789abcdef"
+  run kw_cf_token_read 0123456789abcdef0123456789abcdef
+  [ "$status" -eq 0 ]
+  [ "$output" = zone_token_1234567890123456789012 ]
+  run kw_cf_token_read abcdef0123456789abcdef0123456789
+  [ "$status" -eq 2 ]
+  [[ "$output" == *'Thiếu API token'* ]]
+}
+
 @test "Cloudflare token help names the menu without exposing a token" {
   run kw_cf_token_help
   [ "$status" -eq 0 ]
-  [[ "$output" == *'Cấu hình API token (mục 4)'* ]]
+  [[ "$output" == *'Thêm/thay token theo zone'* ]]
 }
 
 @test "Cloudflare token submenu has status add and instructions" {
@@ -222,6 +244,6 @@ setup() {
   run kw_catalog cf-token
   [ "$status" -eq 0 ]
   [[ "$output" == *'Trạng thái API token|cf-token-status'* ]]
-  [[ "$output" == *'Thêm hoặc thay API token|cf-token-save'* ]]
+  [[ "$output" == *'Thêm/thay token theo zone|cf-zone-token-save'* ]]
   [[ "$output" == *'Hướng dẫn lấy token và cấp quyền|cf-token-guide'* ]]
 }
