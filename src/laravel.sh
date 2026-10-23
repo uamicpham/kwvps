@@ -31,9 +31,9 @@ kw_laravel_layout_ready() {
       return 2
     }
     mode=$(stat -c %a -- "$path") || return 2
-    [[ $mode =~ ^[0-7]{3,4}$ ]] && (( (8#$mode & 0022) == 0 )) || {
+    if ! { [[ $mode =~ ^[0-7]{3,4}$ ]] && (( (8#$mode & 0022) == 0 )); }; then
       kw_log ERROR "Thư mục Laravel có quyền ghi nhóm/khách không an toàn: $path"; return 2;
-    }
+    fi
   done
 }
 
@@ -77,10 +77,12 @@ kw_laravel_git_source() {
 kw_laravel_clone_locked() (
   local domain=$1 url=$2 branch=$3 source
   kw_laravel_layout_ready "$domain" || return 2
-  kw_laravel_git_url_valid "$url" && kw_laravel_branch_valid "$branch" || {
+  if ! kw_laravel_git_url_valid "$url" || ! kw_laravel_branch_valid "$branch"; then
     kw_log ERROR 'URL Git hoặc tên nhánh không hợp lệ. Dùng HTTPS công khai hoặc SSH git@host.'; return 2;
-  }
-  kw_has git && kw_has runuser || { kw_log ERROR 'Thiếu git/runuser trên VPS.'; return 2; }
+  fi
+  if ! kw_has git || ! kw_has runuser; then
+    kw_log ERROR 'Thiếu git/runuser trên VPS.'; return 2;
+  fi
   source=$KW_SITE_ROOT/source
   [[ -z $(find "$source" -mindepth 1 -maxdepth 1 -print -quit) ]] || {
     kw_log ERROR 'source/ không rỗng; không ghi đè repository đã có.'; return 2;
@@ -115,9 +117,9 @@ kw_laravel_pull_locked() (
 kw_laravel_env_edit_locked() (
   local domain=$1 env_file example
   kw_laravel_layout_ready "$domain" || return 2
-  [[ -t 0 && -t 1 ]] && kw_has nano || {
+  if ! { [[ -t 0 && -t 1 ]] && kw_has nano; }; then
     kw_log ERROR 'Cần terminal tương tác và nano để sửa .env.'; return 2;
-  }
+  fi
   env_file=$KW_SITE_ROOT/deploy/shared/.env
   example=$KW_SITE_ROOT/source/.env.example
   [[ ! -L $env_file ]] || return 2
@@ -280,21 +282,21 @@ kw_laravel_deploy_locked() (
     none)
       [[ ! -f $stage/package.json ]] || printf 'Bỏ qua frontend theo lựa chọn; cần bảo đảm assets đã có trong public/.\n' ;;
     npm)
-      [[ -f $stage/package.json && -f $stage/package-lock.json && ! -L $stage/package-lock.json ]] && kw_has npm || {
+      if ! { [[ -f $stage/package.json && -f $stage/package-lock.json && ! -L $stage/package-lock.json ]] && kw_has npm; }; then
         kw_log ERROR 'Cần package.json, package-lock.json và npm.'; return 2;
-      }
+      fi
       runuser -u "$owner" -- npm ci --prefix "$stage" || return 1
       runuser -u "$owner" -- npm run build --prefix "$stage" || return 1 ;;
     pnpm)
-      [[ -f $stage/package.json && -f $stage/pnpm-lock.yaml && ! -L $stage/pnpm-lock.yaml ]] && kw_has pnpm || {
+      if ! { [[ -f $stage/package.json && -f $stage/pnpm-lock.yaml && ! -L $stage/pnpm-lock.yaml ]] && kw_has pnpm; }; then
         kw_log ERROR 'Cần package.json, pnpm-lock.yaml và pnpm.'; return 2;
-      }
+      fi
       runuser -u "$owner" -- pnpm --dir "$stage" install --frozen-lockfile || return 1
       runuser -u "$owner" -- pnpm --dir "$stage" run build || return 1 ;;
     yarn)
-      [[ -f $stage/package.json && -f $stage/yarn.lock && ! -L $stage/yarn.lock ]] && kw_has yarn || {
+      if ! { [[ -f $stage/package.json && -f $stage/yarn.lock && ! -L $stage/yarn.lock ]] && kw_has yarn; }; then
         kw_log ERROR 'Cần package.json, yarn.lock và yarn.'; return 2;
-      }
+      fi
       runuser -u "$owner" -- yarn --cwd "$stage" install --frozen-lockfile || return 1
       runuser -u "$owner" -- yarn --cwd "$stage" build || return 1 ;;
   esac
@@ -323,6 +325,7 @@ kw_laravel_deploy_locked() (
   fi
   trap 'if ((activated && ! success)); then if [[ -n $previous ]]; then ln -sfn -- "$previous" "$next" && mv -Tf -- "$next" "$current" || kw_log ERROR "Không thể quay lại release cũ: $current"; else rm -f -- "$current" || kw_log ERROR "Không thể bỏ current: $current"; fi; if [[ -n $vhost_backup ]]; then install -m 0644 -o root -g root -- "$vhost_backup" "$KW_SITE_VHOST" || kw_log ERROR "Cần phục hồi vhost từ $vhost_backup"; fi; kw_nginx_test_restart || kw_log ERROR "Cần kiểm tra Nginx sau rollback: $domain"; fi; [[ -z $vhost_temp ]] || rm -f -- "$vhost_temp"; [[ -z $next ]] || rm -f -- "$next"' EXIT
   runuser -u "$owner" -- mv -Tf -- "$next" "$current" || return 1
+  # shellcheck disable=SC2034 # Read by the EXIT rollback trap.
   activated=1
   if ((first)); then
     mv -Tf -- "$vhost_temp" "$KW_SITE_VHOST" || return 1
@@ -330,6 +333,7 @@ kw_laravel_deploy_locked() (
   fi
   kw_nginx_test_restart || return 1
   kw_laravel_health "$domain" "$kind" || return 1
+  # shellcheck disable=SC2034 # Read by the EXIT rollback trap.
   success=1
   printf 'Đã triển khai %s: %s. Release trước vẫn được giữ để quay lại nếu cần.\n' "$domain" "$release"
 )

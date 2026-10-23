@@ -27,7 +27,7 @@ kw_fw_ready() {
 }
 
 kw_fw_ssh_ports() {
-  local config port client_ip client_port local_ip local_port extra
+  local config port client_port local_port extra
   kw_has sshd || { kw_log ERROR 'Không đọc được sshd để bảo vệ cổng SSH.'; return 2; }
   config=$(sshd -T 2>/dev/null) || { kw_log ERROR 'sshd -T không hợp lệ; không bật UFW.'; return 2; }
   if systemctl is-active --quiet ssh.socket && [[ -z ${SSH_CONNECTION:-} ]]; then
@@ -39,10 +39,10 @@ kw_fw_ssh_ports() {
     printf '%s\n' "$port"
   done < <(awk '$1 == "port" {print $1, $2}' <<< "$config")
   if [[ -n ${SSH_CONNECTION:-} ]]; then
-    read -r client_ip client_port local_ip local_port extra <<< "$SSH_CONNECTION"
-    [[ -z ${extra:-} ]] && kw_port_valid "$client_port" && kw_port_valid "$local_port" || {
+    read -r _ client_port _ local_port extra <<< "$SSH_CONNECTION"
+    if [[ -n ${extra:-} ]] || ! kw_port_valid "$client_port" || ! kw_port_valid "$local_port"; then
       kw_log ERROR 'Không đọc được cổng phiên SSH hiện tại; không bật UFW.'; return 2;
-    }
+    fi
     printf '%s\n' "$local_port"
   fi
 }
@@ -54,11 +54,14 @@ kw_fw_enable_safe() {
   [[ $state == 'Status: active'* ]] && return 0
   [[ $state == 'Status: inactive'* ]] || { kw_log ERROR 'Trạng thái UFW không xác định; không bật.'; return 2; }
   mode=$(stat -c %a -- /etc/default/ufw 2>/dev/null) || return 2
-  [[ -f /etc/default/ufw && ! -L /etc/default/ufw && $(stat -c %u -- /etc/default/ufw) == 0 &&
-     $mode =~ ^[0-7]{3,4}$ ]] && (( (8#$mode & 0022) == 0 )) &&
-    grep -Eq '^DEFAULT_INPUT_POLICY="?DROP"?$' /etc/default/ufw && kw_fw_ipv6_enabled || {
-      kw_log ERROR 'UFW cần mặc định deny incoming và IPV6=yes trước khi tự bật; kiểm tra /etc/default/ufw.'; return 2;
-    }
+  if ! {
+    [[ -f /etc/default/ufw && ! -L /etc/default/ufw && $(stat -c %u -- /etc/default/ufw) == 0 &&
+       $mode =~ ^[0-7]{3,4}$ ]] &&
+      (( (8#$mode & 0022) == 0 )) &&
+      grep -Eq '^DEFAULT_INPUT_POLICY="?DROP"?$' /etc/default/ufw && kw_fw_ipv6_enabled
+  }; then
+    kw_log ERROR 'UFW cần mặc định deny incoming và IPV6=yes trước khi tự bật; kiểm tra /etc/default/ufw.'; return 2;
+  fi
   ports=$(kw_fw_ssh_ports) || return 2
   [[ -n $ports ]] || { kw_log ERROR 'Không tìm được cổng SSH để bảo vệ; không bật UFW.'; return 2; }
   ports=$(sort -nu <<< "$ports") || return 2

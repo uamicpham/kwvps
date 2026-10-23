@@ -335,7 +335,7 @@ kw_tunnel_acme_renewals() {
 kw_tunnel_inbound_rollback() {
   local port number
   local -a numbers
-  ((committed == 0)) || return 0
+  ((inbound_committed == 0)) || return 0
   if [[ $action == open && $removed_attempted == 1 ]]; then
     for port in "${removed_ports[@]}"; do
       mapfile -t numbers < <(kw_fw_rule_numbers port-deny "$port" tcp)
@@ -357,7 +357,7 @@ kw_tunnel_inbound_rollback() {
 }
 
 kw_tunnel_inbound_change() (
-  local action=$1 renewals='' port state line number ssh_ports ssh_port committed=0 was_inactive=0 removed_attempted=0
+  local action=$1 renewals='' port state line number ssh_ports ssh_port inbound_committed=0 was_inactive=0 removed_attempted=0
   local -a created_ports=() removed_ports=() numbers=()
   ((EUID == 0)) || { kw_log ERROR 'Cần root để đổi inbound 80/443.'; return 2; }
   [[ $action == close || $action == open ]] || return 2
@@ -388,11 +388,7 @@ kw_tunnel_inbound_change() (
   state=$(LC_ALL=C ufw status) || return 2
   [[ $state == 'Status: inactive'* ]] && was_inactive=1
   trap kw_tunnel_inbound_rollback EXIT
-  if [[ $action == open ]]; then
-    kw_fw_enable_safe || return 2
-  else
-    kw_fw_enable_safe || return 2
-  fi
+  kw_fw_enable_safe || return 2
   if [[ $action == close ]]; then
     for port in 80 443; do
       mapfile -t numbers < <(kw_fw_rule_numbers port-deny "$port" tcp)
@@ -437,7 +433,7 @@ kw_tunnel_inbound_change() (
     done
     printf 'Đã mở inbound UFW 80/443.\n'
   fi
-  committed=1
+  inbound_committed=1
   trap - EXIT
   LC_ALL=C ufw status numbered
 )

@@ -873,6 +873,7 @@ kw_site_laravel_plan() {
 }
 
 kw_site_laravel_create_layout() (
+  # shellcheck disable=SC2034 # status is read by the EXIT cleanup trap.
   local root=$1 owner=$2 source deploy path index status expected_mode
   local -a created=() web_paths=()
   [[ $owner =~ ^kw[a-z0-9]{1,29}$ && -d $root && ! -L $root ]] || return 2
