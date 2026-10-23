@@ -43,8 +43,10 @@ kw_cf_realip_rollback() {
     rm -f -- "$kw_cf_realip_target" || kw_log ERROR 'Không gỡ được Real IP vừa tạo.'
   fi
   if nginx -t >/dev/null 2>&1; then
-    systemctl restart nginx >/dev/null 2>&1 && systemctl is-active --quiet nginx ||
+    if ! systemctl restart nginx >/dev/null 2>&1 ||
+       ! systemctl is-active --quiet nginx; then
       kw_log ERROR 'Cần kiểm tra Nginx sau khi hoàn tác Real IP.'
+    fi
   else
     kw_log ERROR 'Cần kiểm tra Nginx sau khi hoàn tác Real IP.'
   fi

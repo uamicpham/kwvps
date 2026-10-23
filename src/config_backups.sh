@@ -288,6 +288,7 @@ kw_config_backup_list() {
 }
 
 kw_config_restore_locked() (
+  # shellcheck disable=SC2034 # rollback_ok is read by the EXIT rollback trap.
   local domain=$1 name=$2 password=${3:-} id stage='' changed=0 committed=0 pool_changed=0 vhost_changed=0 pool_applied=0 vhost_applied=0 rollback_ok=1 old_identity new_identity old_tls=0 new_tls=0 zone_manifest='' secret_zone='' secret_domain='' restored_token=''
   kw_config_backup_preflight "$domain" || return 2
   id=${KW_SITE_OWNER#kw}

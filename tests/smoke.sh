@@ -137,6 +137,7 @@ output=$(
   kw_db_choose_upload() { KW_DB_UPLOAD_CHOICE=existing.sql.gz; }
   kw_db_choose_managed() { KW_DB_MANAGED_CHOICE=demo_db; }
   mariadb() { printf '3\n'; }
+  # shellcheck disable=SC2030 # The mock value is consumed in this same subshell.
   kw_prompt_yes_no_token() { KW_PROMPT_VALUE=$2; }
   kw_db_import_uploaded() { printf 'IMPORTED:%s:%s\n' "$1" "$2"; }
   kw_db_import_uploaded_interactive <<< '1'
@@ -158,10 +159,12 @@ assert kw_site_id_matches_domain kwvpskenhgameztop kwvps.kenhgamez.top
 reject kw_site_id_matches_domain otherid kwvps.kenhgamez.top
 reject kw_site_id longlonglonglonglonglonglonglong.example.com
 assert test "$site_id" = "$(kw_site_id EXAMPLE.COM)"
+# shellcheck disable=SC2031 # Prompt value is set and consumed in the same command substitution.
 prompt_result=$(kw_prompt_validated 'Mật khẩu: ' kw_db_password_valid \
   '12–128 ký tự' secret <<< $'short\nValidPass_123!' && printf 'OK:%s' "$KW_PROMPT_VALUE")
 assert test "${prompt_result#*Giá trị không hợp lệ:}" != "$prompt_result"
 assert test "${prompt_result##*OK:}" = ValidPass_123!
+# shellcheck disable=SC2031 # Confirmation value is set and consumed in the same substitution.
 confirm_result=$(kw_prompt_confirm_domain example.com 'Xác nhận: ' <<< $'wrong.com\nEXAMPLE.COM' &&
   printf 'OK:%s' "$KW_PROMPT_VALUE")
 assert test "${confirm_result#*Giá trị không hợp lệ:}" != "$confirm_result"
