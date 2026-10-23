@@ -4,15 +4,17 @@ Dự án script quản lý VPS cho **Ubuntu Server 24.04 LTS sạch, x86_64 và 
 
 Sau khi cài, lệnh mở menu là `kwvps`.
 
-## Laravel dùng chung cho từng site (0.50.8)
+## Laravel dùng chung cho từng site (0.50.10)
 
-Trong `sudo kwvps` → **Quản lý Sites → Laravel theo site**, chọn site KwVPS theo số. Lần đầu dùng lần lượt: **Chuẩn bị thư mục → Clone Git vào source → Sửa .env → Deploy release**. Lần cập nhật sau: **Pull code → Deploy release**. KwVPS dùng `source/` và `deploy/{releases,shared/storage}` bên trong thư mục site ID; URL Git, nhánh, PHP và `.env` thuộc riêng site, không hardcode dự án nào. `source/`/`deploy/` cũ không bị ghi đè. Mã ứng dụng chạy Composer/npm dưới user riêng của site, không chạy dưới root.
+Mục **Kiểm tra trạng thái/công cụ** liệt kê công cụ còn thiếu và cho chọn cài từng công cụ sau khi xem kế hoạch, xác nhận `y/N`; chỉ cài frontend manager mà dự án cần. Mục **Sửa .env** có thể sửa owner/quyền file hiện có sau xác nhận, không hiển thị hay thay nội dung.
+
+Trong `sudo kwvps` → **Quản lý Sites → Laravel theo site**, chọn site KwVPS theo số. Lần đầu dùng lần lượt: **Chuẩn bị thư mục → Clone Git vào source → Sửa .env → Deploy release**. Với URL SSH, mục Clone tự tạo hoặc hiện lại Deploy Key công khai riêng cho site để thêm vào GitHub trước khi clone; không ghi đè khóa cũ. Lần cập nhật sau: **Pull code → Deploy release**. KwVPS dùng `source/` và `deploy/{releases,shared/storage}` bên trong thư mục site ID; URL Git, nhánh, PHP và `.env` thuộc riêng site, không hardcode dự án nào. `source/`/`deploy/` cũ không bị ghi đè. Mã ứng dụng chạy Composer/npm dưới user riêng của site, không chạy dưới root.
 
 Deploy yêu cầu Git, PHP CLI đúng phiên bản site và Composer; frontend chọn tự nhận lockfile, npm, pnpm, yarn hoặc bỏ qua khi assets đã có sẵn. Repo phải có `artisan`, `composer.json`, `composer.lock`, `public/index.php`, không commit `.env`, không dùng submodule hoặc symlink trong `public/`. KwVPS **không gọi `deploy.sh` của ứng dụng**, không tự migration/seed hay sửa DB. Release mới được tạo rồi đổi `deploy/current`; vhost KwVPS nguyên bản HTTP/SSL chuyển document root tới `current/public`, vẫn phục vụ HTTP-01 từ `public/` cũ. Nginx được kiểm tra/restart và thử HTTP loopback; lỗi sẽ quay lại vhost/release trước. Vhost tùy biến không tự chuyển. Hiện mới kiểm thử cục bộ; **chưa cập nhật VPS production**. Backup source hiện chỉ chứa `public/`, **chưa gồm** source, release, storage, `.env` hoặc DB Laravel; sao lưu riêng trước khi chuyển VPS.
 
 ## Trạng thái
 
-Mã nguồn phiên bản `0.50.9`; kiểm tra [GitHub Releases](https://github.com/uamicpham/kwvps/releases) để biết bản đã công bố. API token Cloudflare dùng riêng theo site; backup cấu hình domain có thể kèm token mã hóa bằng mật khẩu. Xem [ghi chú 0.50.9](docs/RELEASE-NOTES-0.50.9.md) và [bảng trạng thái](docs/TRANG-THAI-CHUC-NANG.md).
+Mã nguồn phiên bản `0.50.10`; kiểm tra [GitHub Releases](https://github.com/uamicpham/kwvps/releases) để biết bản đã công bố. API token Cloudflare dùng riêng theo site; backup cấu hình domain có thể kèm token mã hóa bằng mật khẩu. Xem [ghi chú 0.50.10](docs/RELEASE-NOTES-0.50.10.md) và [bảng trạng thái](docs/TRANG-THAI-CHUC-NANG.md).
 
 Quản lý Sites có tạo, đổi tên miền HTTP nguyên bản, clone source/code, xóa với hai lựa chọn giữ vùng phục hồi/xóa sạch và phân lại quyền. Menu Backup có phục hồi hoặc xóa sạch gói site đã giữ. Tunnel/route thật đã được thử trên VPS lab; đổi tên site không tự cập nhật DNS/route Cloudflare hoặc URL ứng dụng. Các thao tác không xóa dùng xác nhận `y/N`; xóa yêu cầu gõ lại đối tượng. **Không cài đè lên VPS LarVPS, web stack có sẵn hoặc máy chứa website/dữ liệu.**
 

@@ -134,7 +134,7 @@ kw_php_apt_candidate() {
 kw_php_candidate_provenance() {
   local version=$1 candidate=$2 package listings verdict
   package=${3:-php${version}-fpm}
-  [[ $package == "php${version}-fpm" || $package == php-common ]] || return 2
+  [[ $package == "php${version}-fpm" || $package == "php${version}-cli" || $package == php-common ]] || return 2
   listings=$(LC_ALL=C apt-cache madison "$package") || return 2
   verdict=$(awk -F '|' -v wanted="$candidate" '
     { version=$2; origin=$3;

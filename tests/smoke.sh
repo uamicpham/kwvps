@@ -83,6 +83,52 @@ assert kw_laravel_branch_valid main
 reject kw_laravel_branch_valid ../main
 for laravel_frontend in auto none npm pnpm yarn; do assert kw_laravel_frontend_valid "$laravel_frontend"; done
 reject kw_laravel_frontend_valid 'npm;id'
+assert test "$(kw_laravel_apt_package php-cli 8.4)" = php8.4-cli
+assert test "$(kw_laravel_tool_label php-cli 8.4)" = 'PHP 8.4 CLI'
+laravel_node_fixture() (
+  kw_has() { [[ $1 == node || $1 == npm ]]; }
+  node() { printf 'v24.22.1\n'; }
+  kw_laravel_node_ready
+)
+assert laravel_node_fixture
+laravel_old_node_fixture() (
+  kw_has() { [[ $1 == node || $1 == npm ]]; }
+  node() { printf 'v18.20.8\n'; }
+  ! kw_laravel_node_ready
+)
+assert laravel_old_node_fixture
+laravel_node_origin_fixture() (
+  kw_apt_candidate() { printf '24.22.1-1nodesource1\n'; }
+  apt-cache() { printf 'nodejs | 24.22.1-1nodesource1 | https://deb.nodesource.com/node_24.x nodistro/main amd64 Packages\n'; }
+  kw_laravel_nodesource_candidate
+  [[ $KW_LARAVEL_NODE_CANDIDATE == 24.22.1-1nodesource1 ]]
+)
+assert laravel_node_origin_fixture
+laravel_bad_node_origin_fixture() (
+  kw_apt_candidate() { printf '24.22.1-1nodesource1\n'; }
+  apt-cache() { printf 'nodejs | 24.22.1-1nodesource1 | https://example.invalid/node_24.x nodistro/main amd64 Packages\n'; }
+  ! kw_laravel_nodesource_candidate
+)
+assert laravel_bad_node_origin_fixture
+output=$(
+  kw_laravel_status() { KW_SITE_PHP=8.3; printf 'STATUS\n'; }
+  kw_laravel_collect_missing_tools() { KW_LARAVEL_MISSING_TOOLS=(git composer); }
+  kw_laravel_install_tool() { printf 'SELECTED:%s\n' "$2"; }
+  kw_laravel_status_interactive example.com <<< $'2\n0'
+)
+assert grep -Fq ' 1. Git' <<< "$output"
+assert grep -Fq ' 2. Composer' <<< "$output"
+assert grep -Fq 'SELECTED:composer' <<< "$output"
+assert_laravel_apt_cancel_fixture() (
+  kw_apt_candidate() { printf '1.0\n'; }
+  kw_laravel_ubuntu_candidate_origin() { printf 'http://security.ubuntu.com/ubuntu\n'; }
+  kw_laravel_apt_plan() { KW_LARAVEL_APT_PLAN='Inst git (1.0)'; }
+  apt-get() { printf 'UNEXPECTED_INSTALL\n'; return 99; }
+  kw_laravel_apt_install_tool git 8.3 <<< 'n'
+)
+output=$(assert_laravel_apt_cancel_fixture)
+assert grep -Fq 'Đã hủy.' <<< "$output"
+reject grep -Fq 'UNEXPECTED_INSTALL' <<< "$output"
 output=$(kw_laravel_render_vhost letsencrypt example.com examplecom)
 assert grep -Fq 'root /var/www/kwvps/examplecom/deploy/current/public;' <<< "$output"
 assert grep -Fq 'root /var/www/kwvps/examplecom/public;' <<< "$output"

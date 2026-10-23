@@ -5,9 +5,97 @@ setup() {
   source src/core.sh
   source src/sites.sh
   source src/laravel.sh
+  source src/php.sh
   source src/ssl.sh
   source src/menu.sh
   mkdir -p "$BATS_TEST_TMPDIR/site"
+}
+
+@test "Laravel tool list contains only missing commands" {
+  kw_laravel_tool_ready() { [[ $1 == git || $1 == composer ]]; }
+  kw_laravel_collect_missing_tools 8.3
+  [ "${KW_LARAVEL_MISSING_TOOLS[0]}" = php-cli ]
+  [[ " ${KW_LARAVEL_MISSING_TOOLS[*]} " == *' node-npm '* ]]
+  [[ " ${KW_LARAVEL_MISSING_TOOLS[*]} " != *' git '* ]]
+  [[ " ${KW_LARAVEL_MISSING_TOOLS[*]} " != *' composer '* ]]
+}
+
+@test "Laravel Node status rejects obsolete Node and accepts current even LTS" {
+  kw_has() { [[ $1 == node || $1 == npm ]]; }
+  node() { printf 'v18.20.8\n'; }
+  ! kw_laravel_node_ready
+  node() { printf 'v22.11.0\n'; }
+  ! kw_laravel_node_ready
+  node() { printf 'v24.22.1\n'; }
+  kw_laravel_node_ready
+}
+
+@test "Laravel status menu selects missing tool by number and returns with zero" {
+  kw_laravel_status() { KW_SITE_PHP=8.3; printf 'STATUS\n'; }
+  kw_laravel_collect_missing_tools() { KW_LARAVEL_MISSING_TOOLS=(git composer); }
+  kw_laravel_install_tool() { printf 'SELECTED:%s\n' "$2"; }
+  run kw_laravel_status_interactive example.com <<< $'2\n0'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *' 1. Git'* ]]
+  [[ "$output" == *' 2. Composer'* ]]
+  [[ "$output" == *'SELECTED:composer'* ]]
+  [[ "$output" != *'SELECTED:git'* ]]
+}
+
+@test "Laravel tool status is available before layout preparation" {
+  kw_site_prompt_domain() { KW_SITE_CHOICE=example.com; }
+  kw_laravel_layout_ready() { printf 'UNEXPECTED_LAYOUT_CHECK\n'; return 2; }
+  kw_laravel_status_interactive() { printf 'STATUS_READY\n'; }
+  run kw_laravel_interactive status
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'STATUS_READY'* ]]
+  [[ "$output" != *'UNEXPECTED_LAYOUT_CHECK'* ]]
+}
+
+@test "Laravel APT install refuses failed simulation" {
+  apt-get() { printf 'E: impossible\n'; return 100; }
+  run kw_laravel_apt_plan git 1.0
+  [ "$status" -eq 2 ]
+  [[ "$output" == *'APT không mô phỏng được'* ]]
+}
+
+@test "Laravel APT install cancellation never invokes package mutation" {
+  kw_apt_candidate() { printf '1.0\n'; }
+  kw_laravel_ubuntu_candidate_origin() { printf 'http://security.ubuntu.com/ubuntu\n'; }
+  kw_laravel_apt_plan() { KW_LARAVEL_APT_PLAN='Inst git (1.0)'; }
+  apt-get() { printf 'UNEXPECTED_INSTALL\n'; return 99; }
+  run kw_laravel_apt_install_tool git 8.3 <<< 'n'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'Đã hủy.'* ]]
+  [[ "$output" != *'UNEXPECTED_INSTALL'* ]]
+}
+
+@test "Laravel APT tool origin rejects untrusted repository" {
+  apt-cache() { printf 'git | 1.0 | https://example.invalid/ubuntu noble/main amd64 Packages\n'; }
+  ! kw_laravel_ubuntu_candidate_origin git 1.0
+  apt-cache() { printf 'git | 1.0 | http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages\n'; }
+  run kw_laravel_ubuntu_candidate_origin git 1.0
+  [ "$status" -eq 0 ]
+  [ "$output" = http://security.ubuntu.com/ubuntu ]
+}
+
+@test "Laravel Node candidate requires NodeSource 24 origin" {
+  kw_apt_candidate() { printf '24.22.1-1nodesource1\n'; }
+  apt-cache() { printf 'nodejs | 24.22.1-1nodesource1 | https://deb.nodesource.com/node_24.x nodistro/main amd64 Packages\n'; }
+  kw_laravel_nodesource_candidate
+  [ "$KW_LARAVEL_NODE_CANDIDATE" = 24.22.1-1nodesource1 ]
+  apt-cache() { printf 'nodejs | 24.22.1-1nodesource1 | https://example.invalid/node_24.x nodistro/main amd64 Packages\n'; }
+  ! kw_laravel_nodesource_candidate
+}
+
+@test "Laravel pnpm/Yarn installation waits for suitable Node" {
+  kw_laravel_node_ready() { return 1; }
+  npm() { printf 'UNEXPECTED_NPM\n'; return 99; }
+  corepack() { printf 'UNEXPECTED_COREPACK\n'; return 99; }
+  run kw_laravel_frontend_install pnpm
+  [ "$status" -eq 2 ]
+  [[ "$output" == *'Cần Node.js/npm phù hợp'* ]]
+  [[ "$output" != *'UNEXPECTED_'* ]]
 }
 
 @test "Laravel action appears in site menu" {

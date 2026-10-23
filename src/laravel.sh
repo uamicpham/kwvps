@@ -37,21 +37,74 @@ kw_laravel_layout_ready() {
   done
 }
 
-kw_laravel_status() {
-  local domain=$1 tool current
-  kw_laravel_layout_ready "$domain" || return 2
-  printf 'Laravel: %s (PHP %s)\n' "$domain" "$KW_SITE_PHP"
-  for tool in git composer "php$KW_SITE_PHP" npm pnpm yarn; do
-    if kw_has "$tool"; then printf '  %-12s sẵn sàng\n' "$tool"
-    else printf '  %-12s chưa cài\n' "$tool"; fi
+kw_laravel_node_ready() {
+  local version major minor
+  kw_has node && kw_has npm || return 1
+  version=$(node --version 2>/dev/null) || return 1
+  [[ $version =~ ^v([0-9]+)\.([0-9]+)\.[0-9]+$ ]] || return 1
+  major=${BASH_REMATCH[1]}; minor=${BASH_REMATCH[2]}
+  ((major >= 22 && major % 2 == 0 && (major != 22 || minor >= 12)))
+}
+
+kw_laravel_tool_ready() {
+  local tool=$1 php=$2
+  case "$tool" in
+    php-cli) kw_has "php$php" ;;
+    node-npm) kw_laravel_node_ready ;;
+    *) kw_has "$tool" ;;
+  esac
+}
+
+kw_laravel_tool_label() {
+  local tool=$1 php=$2
+  case "$tool" in
+    php-cli) printf 'PHP %s CLI' "$php" ;;
+    node-npm) printf 'Node.js/npm (Node >= 22.12, bản chẵn)' ;;
+    git) printf 'Git' ;; composer) printf 'Composer' ;;
+    pnpm) printf 'pnpm (Corepack)' ;; yarn) printf 'Yarn (Corepack)' ;;
+    tar) printf 'tar' ;; curl) printf 'curl' ;; nano) printf 'nano' ;;
+    gpg) printf 'GnuPG (để thêm nguồn Node.js)' ;;
+    *) return 2 ;;
+  esac
+}
+
+kw_laravel_collect_missing_tools() {
+  local php=$1 tool
+  KW_LARAVEL_MISSING_TOOLS=()
+  for tool in git composer php-cli tar curl nano node-npm gpg pnpm yarn; do
+    if [[ $tool == gpg ]] && kw_laravel_node_ready; then continue; fi
+    if ! kw_laravel_tool_ready "$tool" "$php"; then
+      KW_LARAVEL_MISSING_TOOLS+=("$tool")
+    fi
   done
+}
+
+kw_laravel_status() {
+  local domain=$1 tool current label
+  kw_site_lookup "$domain" || return 2
+  printf 'Laravel: %s (PHP %s)\n' "$domain" "$KW_SITE_PHP"
+  printf 'Công cụ cần cho Git/Composer và tùy chọn build frontend:\n'
+  for tool in git composer php-cli tar curl nano node-npm gpg pnpm yarn; do
+    if [[ $tool == gpg ]] && kw_laravel_node_ready; then continue; fi
+    label=$(kw_laravel_tool_label "$tool" "$KW_SITE_PHP") || return 2
+    if kw_laravel_tool_ready "$tool" "$KW_SITE_PHP"; then
+      printf '  %s: sẵn sàng\n' "$label"
+    else
+      printf '  %s: thiếu hoặc chưa phù hợp\n' "$label"
+    fi
+  done
+  if [[ ! -d $KW_SITE_ROOT/deploy || ! -d $KW_SITE_ROOT/source ]]; then
+    printf '  Cấu trúc: chưa chuẩn bị; dùng mục Chuẩn bị thư mục Laravel.\n'
+  fi
   if [[ -d $KW_SITE_ROOT/source/.git && ! -L $KW_SITE_ROOT/source/.git ]]; then
     printf '  Git source: đã clone\n'
   else
     printf '  Git source: chưa clone\n'
   fi
-  if [[ -f $KW_SITE_ROOT/deploy/shared/.env && ! -L $KW_SITE_ROOT/deploy/shared/.env ]]; then
-    printf '  .env: đã có (không hiển thị nội dung)\n'
+  if kw_laravel_env_safe "$KW_SITE_ROOT/deploy/shared/.env" "$KW_SITE_OWNER"; then
+    printf '  .env: đã có, quyền an toàn (không hiển thị nội dung)\n'
+  elif [[ -e $KW_SITE_ROOT/deploy/shared/.env || -L $KW_SITE_ROOT/deploy/shared/.env ]]; then
+    printf '  .env: có nhưng owner/quyền chưa an toàn; dùng mục Sửa .env\n'
   else
     printf '  .env: chưa có\n'
   fi
@@ -61,7 +114,313 @@ kw_laravel_status() {
   else
     printf '  Release hiện tại: chưa kích hoạt\n'
   fi
-  printf 'Composer cần gói composer của Ubuntu hoặc bản chính thức; frontend cần công cụ khớp lockfile dự án.\n'
+  printf 'Chỉ cần cài npm/pnpm/Yarn nếu dự án dùng build frontend tương ứng.\n'
+}
+
+kw_laravel_apt_package() {
+  local tool=$1 php=$2
+  case "$tool" in
+    php-cli) printf 'php%s-cli' "$php" ;;
+    git|composer|tar|curl|nano|gpg) printf '%s' "$tool" ;;
+    *) return 2 ;;
+  esac
+}
+
+kw_laravel_apt_plan() {
+  local package=$1 candidate=$2 plan
+  plan=$(LC_ALL=C apt-get -s --no-remove --no-install-recommends install "$package=$candidate" 2>&1) || {
+    kw_log ERROR "APT không mô phỏng được gói $package; chưa thay đổi VPS."
+    printf '%s\n' "$plan" >&2
+    return 2
+  }
+  if grep -Eq '^Remv[[:space:]]' <<< "$plan"; then
+    kw_log ERROR 'Kế hoạch APT cần gỡ gói khác; không cài tự động.'
+    return 2
+  fi
+  KW_LARAVEL_APT_PLAN=$plan
+}
+
+kw_laravel_ubuntu_candidate_origin() {
+  local package=$1 candidate=$2 listings
+  listings=$(LC_ALL=C apt-cache madison "$package") || return 2
+  awk -F '|' -v wanted="$candidate" '
+    { version=$2; origin=$3;
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", version);
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", origin);
+      if (version != wanted) next;
+      split(origin, parts, /[[:space:]]+/); url=parts[1];
+      if (url ~ /^https?:\/\/([[:alnum:]-]+\.)*archive\.ubuntu\.com\/ubuntu\/?$/ ||
+          url ~ /^https?:\/\/security\.ubuntu\.com\/ubuntu\/?$/ ||
+          url ~ /^https?:\/\/ports\.ubuntu\.com\/ubuntu-ports\/?$/) {
+        trusted=1; if (first == "") first=url
+      } else untrusted=1
+    }
+    END { if (!trusted || untrusted) exit 1; print first }
+  ' <<< "$listings"
+}
+
+kw_laravel_apt_install_tool() {
+  local tool=$1 php=$2 package candidate label origin
+  package=$(kw_laravel_apt_package "$tool" "$php") || return 2
+  label=$(kw_laravel_tool_label "$tool" "$php") || return 2
+  candidate=$(kw_apt_candidate "$package") || {
+    kw_log ERROR "APT chưa có candidate cho $package. Kiểm tra nguồn gói và apt-get update."
+    return 2
+  }
+  if [[ $tool == php-cli ]]; then
+    if kw_php_debian_sury_repo_present; then
+      kw_log ERROR 'Nguồn Debian deb.sury.org không dùng cho Ubuntu; không cài PHP CLI.'; return 2
+    fi
+    kw_php_candidate_provenance "$php" "$candidate" "$package" || {
+      kw_log ERROR 'Không xác minh được nguồn Ubuntu/PPA Ondřej của PHP CLI.'; return 2
+    }
+    if [[ $KW_PHP_APT_ORIGIN_KIND == ondrej ]] && ! kw_php_ondrej_pin_matches; then
+      kw_log ERROR 'PPA Ondřej chưa có ưu tiên APT KwVPS an toàn; dùng menu Cài gói PHP-FPM để cấu hình nguồn trước.'
+      return 2
+    fi
+    if [[ $php == 7.4 ]]; then
+      [[ $KW_PHP_APT_ORIGIN_KIND == ondrej ]] || {
+        kw_log ERROR 'PHP 7.4 CLI chỉ chấp nhận PPA Ubuntu Ondřej.'; return 2;
+      }
+      printf 'CẢNH BÁO: PHP 7.4 đã hết hỗ trợ bảo mật; chỉ dùng cho ứng dụng cũ cần tương thích.\n'
+    elif ! kw_php_package_version_safe "$php" "$candidate"; then
+      kw_log ERROR "PHP $php CLI candidate chưa đạt bản vá KwVPS yêu cầu; không cài."
+      return 2
+    fi
+    printf 'Nguồn PHP CLI: %s (%s).\n' "$KW_PHP_APT_ORIGIN_URL" "$KW_PHP_APT_ORIGIN_KIND"
+  else
+    origin=$(kw_laravel_ubuntu_candidate_origin "$package" "$candidate") || {
+      kw_log ERROR "Candidate $package không từ kho Ubuntu chính thức; không cài tự động."
+      return 2
+    }
+    printf 'Nguồn APT: %s.\n' "$origin"
+  fi
+  kw_laravel_apt_plan "$package" "$candidate" || return 2
+  printf 'Cài %s từ APT: %s=%s\n' "$label" "$package" "$candidate"
+  printf '%s\n' "$KW_LARAVEL_APT_PLAN" | awk '/^(Inst|Remv|Conf) / { print }'
+  kw_prompt_yes_no_token "Cài $label trên VPS?" "LARAVEL-TOOL:$tool" || return 0
+  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-remove --no-install-recommends "$package=$candidate" || return 1
+  kw_laravel_tool_ready "$tool" "$php" || {
+    kw_log ERROR "APT đã chạy nhưng $label vẫn chưa sẵn sàng; kiểm tra package thủ công."
+    return 1
+  }
+  printf 'Đã cài %s.\n' "$label"
+}
+
+kw_laravel_nodesource_source() {
+  printf 'Types: deb\nURIs: https://deb.nodesource.com/node_24.x\nSuites: nodistro\nComponents: main\nSigned-By: /etc/apt/keyrings/kwvps-nodesource.gpg\n'
+}
+
+kw_laravel_nodesource_fingerprint() {
+  local key=$1 output
+  output=$(gpg --batch --quiet --show-keys --with-colons -- "$key" 2>/dev/null) || return 1
+  awk -F: '$1 == "fpr" && !found { print $10; found=1 }' <<< "$output"
+}
+
+kw_laravel_nodesource_candidate() {
+  local candidate listings
+  candidate=$(kw_apt_candidate nodejs) || return 2
+  [[ $candidate == 24.* ]] || return 2
+  listings=$(LC_ALL=C apt-cache madison nodejs) || return 2
+  awk -F '|' -v wanted="$candidate" '
+    { version=$2; origin=$3;
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", version);
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", origin);
+      if (version != wanted) next;
+      split(origin, parts, /[[:space:]]+/);
+      if (parts[1] ~ /^https:\/\/deb\.nodesource\.com\/node_24\.x\/?$/) trusted=1;
+      else untrusted=1
+    }
+    END { if (!trusted || untrusted) exit 1 }
+  ' <<< "$listings" || return 2
+  KW_LARAVEL_NODE_CANDIDATE=$candidate
+}
+
+kw_laravel_nodesource_repo_check() {
+  local source key fingerprint
+  source=/etc/apt/sources.list.d/kwvps-nodesource.sources
+  key=/etc/apt/keyrings/kwvps-nodesource.gpg
+  [[ -f $source && ! -L $source && -f $key && ! -L $key ]] || return 1
+  kw_laravel_nodesource_source | cmp -s - "$source" || return 1
+  fingerprint=$(kw_laravel_nodesource_fingerprint "$key") || return 1
+  [[ $fingerprint == 6F71F525282841EEDAF851B42F59B5F99B1BE0B4 ]]
+}
+
+kw_laravel_nodesource_repo_add() {
+  local source key file tmpdir fingerprint
+  source=/etc/apt/sources.list.d/kwvps-nodesource.sources
+  key=/etc/apt/keyrings/kwvps-nodesource.gpg
+  [[ -d /etc/apt/sources.list.d && ! -L /etc/apt/sources.list.d ]] || return 2
+  if [[ ! -e /etc/apt/keyrings && ! -L /etc/apt/keyrings ]]; then
+    install -d -m 0755 -o root -g root /etc/apt/keyrings || return 1
+  fi
+  [[ -d /etc/apt/keyrings && ! -L /etc/apt/keyrings ]] || return 2
+  [[ ! -e $source && ! -L $source && ! -e $key && ! -L $key ]] || return 2
+  for file in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
+    [[ -f $file ]] || continue
+    if grep -Fq 'deb.nodesource.com' "$file"; then
+      kw_log ERROR "Đã có nguồn NodeSource tại $file; không tạo bản trùng hoặc ghi đè."
+      return 2
+    fi
+  done
+  tmpdir=$(mktemp -d /tmp/kwvps-nodesource.XXXXXXXX) || return 1
+  if ! curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 \
+      --connect-timeout 10 --max-time 30 --max-filesize 1048576 \
+      -o "$tmpdir/key.asc" 'https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key'; then
+    rm -rf -- "$tmpdir"
+    return 1
+  fi
+  fingerprint=$(kw_laravel_nodesource_fingerprint "$tmpdir/key.asc") || {
+    rm -rf -- "$tmpdir"; return 2;
+  }
+  if [[ $fingerprint != 6F71F525282841EEDAF851B42F59B5F99B1BE0B4 ]]; then
+    kw_log ERROR 'Fingerprint khóa NodeSource không khớp; không thêm nguồn.'
+    rm -rf -- "$tmpdir"
+    return 2
+  fi
+  if ! gpg --batch --yes --dearmor -o "$tmpdir/key.gpg" "$tmpdir/key.asc" ||
+     ! install -m 0644 -o root -g root -- "$tmpdir/key.gpg" "$key" ||
+     ! kw_laravel_nodesource_source > "$tmpdir/nodesource.sources" ||
+     ! install -m 0644 -o root -g root -- "$tmpdir/nodesource.sources" "$source"; then
+    rm -f -- "$source" "$key"
+    rm -rf -- "$tmpdir"
+    return 1
+  fi
+  rm -rf -- "$tmpdir"
+}
+
+kw_laravel_node_install() {
+  local candidate source key repo_added=0
+  source=/etc/apt/sources.list.d/kwvps-nodesource.sources
+  key=/etc/apt/keyrings/kwvps-nodesource.gpg
+  if kw_has node || kw_has npm ||
+     dpkg-query -W nodejs >/dev/null 2>&1 || dpkg-query -W npm >/dev/null 2>&1; then
+    kw_log ERROR 'Node/npm đã có nhưng thiếu hoặc chưa đủ phiên bản. Không tự thay runtime đang dùng bởi website khác; kiểm tra thủ công.'
+    return 2
+  fi
+  kw_has curl && kw_has gpg || {
+    kw_log ERROR 'Cần cài curl và GnuPG từ danh sách công cụ trước khi thêm NodeSource.'; return 2;
+  }
+  if [[ -e $source || -L $source || -e $key || -L $key ]]; then
+    kw_laravel_nodesource_repo_check || {
+      kw_log ERROR 'Nguồn NodeSource KwVPS hiện có không khớp mẫu/khóa tin cậy; không ghi đè.'; return 2;
+    }
+  else
+    printf 'Node.js 24 LTS và npm lấy từ APT NodeSource (kho bên thứ ba, chỉ dành Ubuntu 24.04).\n'
+    printf 'KwVPS xác minh fingerprint khóa ký; không chạy script cài tải từ Internet.\n'
+    kw_prompt_yes_no_token 'Thêm nguồn APT NodeSource 24?' 'LARAVEL-NODESOURCE' || return 0
+    kw_laravel_nodesource_repo_add || return 2
+    repo_added=1
+  fi
+  if ! apt-get -o APT::Update::Error-Mode=any update; then
+    if ((repo_added)); then rm -f -- "$source" "$key"; fi
+    kw_log ERROR 'APT update thất bại; đã gỡ nguồn NodeSource vừa thêm (nếu có).'
+    return 1
+  fi
+  if ! kw_laravel_nodesource_candidate; then
+    if ((repo_added)); then rm -f -- "$source" "$key"; fi
+    kw_log ERROR 'APT không có candidate Node.js 24 từ NodeSource; chưa cài.'
+    return 2
+  fi
+  candidate=$KW_LARAVEL_NODE_CANDIDATE
+  if ! kw_laravel_apt_plan nodejs "$candidate"; then
+    if ((repo_added)); then rm -f -- "$source" "$key"; fi
+    return 2
+  fi
+  printf 'Node.js/npm candidate: %s (NodeSource 24).\n' "$candidate"
+  printf '%s\n' "$KW_LARAVEL_APT_PLAN" | awk '/^(Inst|Remv|Conf) / { print }'
+  if ! kw_prompt_yes_no_token 'Cài Node.js 24 và npm trên toàn VPS?' 'LARAVEL-NODE24'; then
+    if ((repo_added)); then rm -f -- "$source" "$key"; fi
+    return 0
+  fi
+  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-remove --no-install-recommends "nodejs=$candidate" || return 1
+  kw_laravel_node_ready || {
+    kw_log ERROR 'APT đã cài Node.js nhưng node/npm chưa đạt yêu cầu; kiểm tra thủ công.'; return 1;
+  }
+  printf 'Đã cài Node.js %s và npm.\n' "$(node --version)"
+}
+
+kw_laravel_frontend_install() {
+  local tool=$1 version
+  [[ $tool == pnpm || $tool == yarn ]] || return 2
+  kw_laravel_node_ready || {
+    kw_log ERROR 'Cần Node.js/npm phù hợp trước khi kích hoạt pnpm/Yarn.'; return 2;
+  }
+  [[ ! -e /usr/local/bin/$tool && ! -L /usr/local/bin/$tool ]] || {
+    kw_log ERROR "/usr/local/bin/$tool đã có; không ghi đè."; return 2;
+  }
+  if ! kw_has corepack; then
+    version=$(npm --registry=https://registry.npmjs.org view corepack dist-tags.latest 2>/dev/null) || return 1
+    [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+      kw_log ERROR 'Không xác minh được phiên bản Corepack từ npmjs.org.'; return 2;
+    }
+    printf 'Corepack chưa có; sẽ cài corepack@%s từ registry.npmjs.org, bỏ qua lifecycle scripts.\n' "$version"
+    kw_prompt_yes_no_token 'Cài Corepack toàn VPS?' 'LARAVEL-COREPACK' || return 0
+    npm --registry=https://registry.npmjs.org install --global --ignore-scripts --no-audit --no-fund "corepack@$version" || return 1
+    kw_has corepack || return 1
+  fi
+  printf 'Corepack sẽ tạo shim %s trong /usr/local/bin; phiên bản package manager của dự án được lấy theo packageManager khi deploy.\n' "$tool"
+  kw_prompt_yes_no_token "Kích hoạt $tool qua Corepack?" "LARAVEL-COREPACK:$tool" || return 0
+  corepack enable --install-directory /usr/local/bin "$tool" || return 1
+  kw_has "$tool" || return 1
+  printf 'Đã kích hoạt %s qua Corepack.\n' "$tool"
+}
+
+kw_laravel_install_tool_locked() {
+  local domain=$1 tool=$2 php
+  ((EUID == 0)) && kw_os_supported '' && [[ $(uname -m) == x86_64 ]] || {
+    kw_log ERROR 'Cần root trên Ubuntu 24.04 x86_64 để cài công cụ.'; return 2;
+  }
+  kw_has apt-get && kw_has apt-cache && kw_has dpkg-query || return 2
+  kw_site_lookup "$domain" || return 2
+  php=$KW_SITE_PHP
+  if kw_laravel_tool_ready "$tool" "$php"; then
+    printf '%s đã sẵn sàng; không cài lại.\n' "$(kw_laravel_tool_label "$tool" "$php")"
+    return 0
+  fi
+  case "$tool" in
+    git|composer|php-cli|tar|curl|nano|gpg) kw_laravel_apt_install_tool "$tool" "$php" ;;
+    node-npm) kw_laravel_node_install ;;
+    pnpm|yarn) kw_laravel_frontend_install "$tool" ;;
+    *) return 2 ;;
+  esac
+}
+
+kw_laravel_install_tool() (
+  kw_has flock || { kw_log ERROR 'Thiếu flock để khóa thao tác cài package.'; return 2; }
+  exec 9>/run/lock/kwvps-laravel-tools.lock || return 2
+  flock -n 9 || { kw_log ERROR 'Đang có lượt cài công cụ Laravel khác; thử lại sau.'; return 1; }
+  kw_laravel_install_tool_locked "$@"
+)
+
+kw_laravel_status_interactive() {
+  local domain=$1 choice tool i php code
+  while :; do
+    kw_laravel_status "$domain" || return 2
+    php=$KW_SITE_PHP
+    kw_laravel_collect_missing_tools "$php"
+    printf '\nCài công cụ còn thiếu (chọn từng mục):\n'
+    i=0
+    for tool in "${KW_LARAVEL_MISSING_TOOLS[@]}"; do
+      i=$((i + 1))
+      printf '%2d. %s\n' "$i" "$(kw_laravel_tool_label "$tool" "$php")"
+    done
+    if ((i == 0)); then printf 'Không còn công cụ thiếu trong danh sách.\n'; fi
+    printf ' 0. Quay lại\nChọn: '
+    IFS= read -r choice || return 0
+    [[ $choice != 0 ]] || return 0
+    if [[ ! $choice =~ ^[1-9][0-9]?$ ]] || ((choice > i)); then
+      printf 'Chọn số trong danh sách.\n'
+      continue
+    fi
+    tool=${KW_LARAVEL_MISSING_TOOLS[choice-1]}
+    code=0
+    kw_laravel_install_tool "$domain" "$tool" || code=$?
+    if ((code != 0)); then
+      printf 'Chưa cài được công cụ (mã %d); xem thông báo phía trên.\n' "$code"
+    fi
+    printf '\n'
+  done
 }
 
 kw_laravel_git_source() {
@@ -72,6 +431,69 @@ kw_laravel_git_source() {
   }
   runuser -u "$owner" -- git -C "$source" rev-parse --is-inside-work-tree 2>/dev/null |
     grep -Fxq true || return 2
+}
+
+kw_laravel_deploy_key_prepare() {
+  local domain=$1 ssh_dir private public_file mode derived key_type key_blob
+  local file_type='' file_blob=''
+  kw_laravel_layout_ready "$domain" || return 2
+  kw_has ssh-keygen && kw_has runuser || {
+    kw_log ERROR 'Thiếu ssh-keygen/runuser để tạo Deploy Key cho site.'; return 2;
+  }
+  ssh_dir=$KW_SITE_ROOT/.ssh
+  private=$ssh_dir/id_ed25519
+  public_file=$private.pub
+  if [[ ! -e $ssh_dir && ! -L $ssh_dir ]]; then
+    runuser -u "$KW_SITE_OWNER" -- mkdir -m 0700 -- "$ssh_dir" || return 1
+  fi
+  [[ -d $ssh_dir && ! -L $ssh_dir &&
+     $(stat -c %U -- "$ssh_dir") == "$KW_SITE_OWNER" ]] || {
+    kw_log ERROR "Thư mục SSH của site không an toàn: $ssh_dir"; return 2;
+  }
+  mode=$(stat -c %a -- "$ssh_dir") || return 2
+  [[ $mode =~ ^[0-7]{3,4}$ ]] && (( (8#$mode & 0077) == 0 )) || {
+    kw_log ERROR "Thư mục SSH phải chỉ user site được truy cập: $ssh_dir"; return 2;
+  }
+
+  if [[ ! -e $private && ! -L $private ]]; then
+    [[ ! -e $public_file && ! -L $public_file ]] || {
+      kw_log ERROR "Chỉ có public key nhưng thiếu private key: $public_file. Không ghi đè."; return 2;
+    }
+    runuser -u "$KW_SITE_OWNER" -- ssh-keygen -q -t ed25519 -N '' \
+      -f "$private" -C "kwvps-$domain" || return 1
+    printf 'Đã tạo SSH Deploy Key riêng cho %s.\n' "$domain"
+  else
+    printf 'Dùng lại SSH Deploy Key đã có của %s; không tạo khóa mới.\n' "$domain"
+  fi
+  [[ -f $private && ! -L $private &&
+     $(stat -c %U -- "$private") == "$KW_SITE_OWNER" ]] || {
+    kw_log ERROR "Private key của site không an toàn: $private"; return 2;
+  }
+  mode=$(stat -c %a -- "$private") || return 2
+  [[ $mode =~ ^[0-7]{3,4}$ ]] && (( (8#$mode & 0077) == 0 )) || {
+    kw_log ERROR "Private key có quyền đọc quá rộng: $private"; return 2;
+  }
+  derived=$(runuser -u "$KW_SITE_OWNER" -- ssh-keygen -y -P '' -f "$private" 2>/dev/null) || {
+    kw_log ERROR 'Không đọc được SSH Deploy Key Ed25519 không mật khẩu của site; không thay key cũ.'
+    return 2
+  }
+  read -r key_type key_blob _ <<< "$derived"
+  [[ $key_type == ssh-ed25519 && $key_blob =~ ^[A-Za-z0-9+/]+={0,2}$ ]] || {
+    kw_log ERROR 'Deploy Key hiện có không phải Ed25519 hợp lệ; không thay key cũ.'; return 2;
+  }
+  if [[ -e $public_file || -L $public_file ]]; then
+    [[ -f $public_file && ! -L $public_file &&
+       $(stat -c %U -- "$public_file") == "$KW_SITE_OWNER" ]] || {
+      kw_log ERROR "Public key của site không an toàn: $public_file"; return 2;
+    }
+    IFS=' ' read -r file_type file_blob _ < "$public_file" || true
+    if [[ $file_type != "$key_type" || $file_blob != "$key_blob" ]]; then
+      kw_log WARN 'File .pub không khớp private key; hiển thị key đúng suy ra từ private key, không ghi đè file cũ.'
+    fi
+  fi
+  printf '\nDeploy Key CÔNG KHAI của %s (có thể sao chép):\n%s %s\n\n' \
+    "$domain" "$key_type" "$key_blob"
+  printf 'Private key giữ tại %s (không sao chép hoặc gửi đi).\n' "$private"
 }
 
 kw_laravel_clone_locked() (
@@ -88,7 +510,12 @@ kw_laravel_clone_locked() (
     kw_log ERROR 'source/ không rỗng; không ghi đè repository đã có.'; return 2;
   }
   printf 'Đang clone nhánh %s cho %s bằng user %s...\n' "$branch" "$domain" "$KW_SITE_OWNER"
-  runuser -u "$KW_SITE_OWNER" -- git clone --branch "$branch" --single-branch -- "$url" "$source" || return 1
+  if ! runuser -u "$KW_SITE_OWNER" -- git clone --branch "$branch" --single-branch -- "$url" "$source"; then
+    if [[ $url == git@* || $url == ssh://git@* ]]; then
+      kw_log ERROR 'Clone SSH thất bại: kiểm tra Deploy Key trong repository, quyền truy cập và host key. Vào lại mục Clone để xem cùng public key.'
+    fi
+    return 1
+  fi
   kw_laravel_git_source || return 1
   printf 'Đã clone vào %s. Không chạy script từ repository hoặc đổi website.\n' "$source"
 )
@@ -114,26 +541,120 @@ kw_laravel_pull_locked() (
     "$(runuser -u "$KW_SITE_OWNER" -- git -C "$source" rev-parse --short=12 HEAD)"
 )
 
-kw_laravel_env_edit_locked() (
-  local domain=$1 env_file example
+kw_laravel_env_safe() {
+  local env_file=$1 owner=$2 uid
+  [[ -f $env_file && ! -L $env_file ]] || return 1
+  uid=$(id -u "$owner") || return 1
+  [[ $(stat -c '%u:%a:%h' -- "$env_file") == "$uid:600:1" ]]
+}
+
+kw_laravel_env_repair_fd() {
+  local site_root=$1 owner=$2
+  kw_has python3 || {
+    kw_log ERROR 'Thiếu python3 để sửa owner/quyền .env an toàn; chưa thay đổi file.'; return 2;
+  }
+  python3 - "$site_root" "$owner" <<'PY'
+import os
+import pwd
+import stat
+import sys
+from contextlib import ExitStack
+
+site_root, owner = sys.argv[1:]
+directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+file_flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
+
+try:
+    user = pwd.getpwnam(owner)
+    with ExitStack() as stack:
+        site_fd = os.open(site_root, directory_flags)
+        stack.callback(os.close, site_fd)
+        deploy_fd = os.open('deploy', directory_flags, dir_fd=site_fd)
+        stack.callback(os.close, deploy_fd)
+        shared_fd = os.open('shared', directory_flags, dir_fd=deploy_fd)
+        stack.callback(os.close, shared_fd)
+        for directory_fd in (site_fd, deploy_fd, shared_fd):
+            info = os.fstat(directory_fd)
+            if (not stat.S_ISDIR(info.st_mode) or info.st_uid != user.pw_uid
+                    or info.st_mode & 0o022):
+                raise ValueError('thư mục site/deploy/shared không an toàn')
+        env_fd = os.open('.env', file_flags, dir_fd=shared_fd)
+        stack.callback(os.close, env_fd)
+        info = os.fstat(env_fd)
+        if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+                or info.st_uid not in (0, user.pw_uid)):
+            raise ValueError('.env không phải file thường một liên kết của root/site')
+        current = os.stat('.env', dir_fd=shared_fd, follow_symlinks=False)
+        if current.st_dev != info.st_dev or current.st_ino != info.st_ino:
+            raise ValueError('.env đã thay đổi trước khi sửa')
+        # Restrict access before handing a root-owned file to the site user.
+        os.fchmod(env_fd, 0o600)
+        if info.st_uid == 0:
+            os.fchown(env_fd, user.pw_uid, user.pw_gid)
+        current = os.stat('.env', dir_fd=shared_fd, follow_symlinks=False)
+        if (current.st_dev != info.st_dev or current.st_ino != info.st_ino
+                or not stat.S_ISREG(current.st_mode)
+                or current.st_nlink != 1 or current.st_uid != user.pw_uid
+                or stat.S_IMODE(current.st_mode) != 0o600):
+            raise ValueError('.env đã thay đổi trong lúc sửa; cần kiểm tra lại')
+except (OSError, ValueError, KeyError) as exc:
+    print(f'Không sửa được quyền .env an toàn: {exc}', file=sys.stderr)
+    sys.exit(2)
+PY
+}
+
+kw_laravel_env_prepare() {
+  local domain=$1 env_file example owner_uid links details
+  KW_LARAVEL_ENV_READY=0
   kw_laravel_layout_ready "$domain" || return 2
-  if ! { [[ -t 0 && -t 1 ]] && kw_has nano; }; then
-    kw_log ERROR 'Cần terminal tương tác và nano để sửa .env.'; return 2;
-  fi
   env_file=$KW_SITE_ROOT/deploy/shared/.env
   example=$KW_SITE_ROOT/source/.env.example
-  [[ ! -L $env_file ]] || return 2
+  [[ ! -L $env_file ]] || {
+    kw_log ERROR '.env là symlink; không mở hoặc tự sửa.'; return 2;
+  }
   if [[ ! -e $env_file ]]; then
     if [[ -f $example && ! -L $example ]]; then
       runuser -u "$KW_SITE_OWNER" -- install -m 0600 -- "$example" "$env_file" || return 1
     else
       runuser -u "$KW_SITE_OWNER" -- install -m 0600 /dev/null "$env_file" || return 1
     fi
+    printf 'Đã tạo .env cho %s; hãy điền APP_KEY, DB và cấu hình ứng dụng.\n' "$domain"
   fi
-  [[ -f $env_file && $(stat -c '%U:%a' -- "$env_file") == "$KW_SITE_OWNER:600" ]] || {
-    kw_log ERROR '.env có owner/quyền không an toàn; không mở file.'; return 2;
+  if ! kw_laravel_env_safe "$env_file" "$KW_SITE_OWNER"; then
+    [[ -f $env_file && ! -L $env_file ]] || {
+      kw_log ERROR '.env không phải file thường; không tự sửa.'; return 2;
+    }
+    links=$(stat -c %h -- "$env_file") || return 2
+    owner_uid=$(stat -c %u -- "$env_file") || return 2
+    details=$(stat -c 'owner=%U:%G mode=%a links=%h' -- "$env_file") || return 2
+    printf '.env của %s hiện có %s (không hiển thị nội dung).\n' "$domain" "$details"
+    [[ $links == 1 && ( $owner_uid == 0 || $owner_uid == "$(id -u "$KW_SITE_OWNER")" ) ]] || {
+      kw_log ERROR 'Chỉ tự sửa file thường một liên kết thuộc root hoặc user site; cần kiểm tra thủ công.'
+      return 2
+    }
+    kw_prompt_yes_no_token "Chỉ sửa owner/quyền .env của $domain thành $KW_SITE_OWNER:600, giữ nguyên nội dung?" "$domain" || return 0
+    kw_laravel_env_repair_fd "$KW_SITE_ROOT" "$KW_SITE_OWNER" || return 2
+  fi
+  kw_laravel_env_safe "$env_file" "$KW_SITE_OWNER" || {
+    kw_log ERROR '.env vẫn chưa an toàn sau khi tạo/sửa; không mở file.'; return 2;
   }
-  runuser -u "$KW_SITE_OWNER" -- nano "$env_file"
+  KW_LARAVEL_ENV_READY=1
+}
+
+kw_laravel_env_edit_locked() (
+  local domain=$1 env_file
+  kw_laravel_layout_ready "$domain" || return 2
+  if ! { [[ -t 0 && -t 1 ]] && kw_has nano; }; then
+    kw_log ERROR 'Cần terminal tương tác và nano để sửa .env.'; return 2;
+  fi
+  kw_laravel_env_prepare "$domain" || return 2
+  ((KW_LARAVEL_ENV_READY)) || return 0
+  env_file=$KW_SITE_ROOT/deploy/shared/.env
+  runuser -u "$KW_SITE_OWNER" -- nano "$env_file" || return 1
+  kw_laravel_env_safe "$env_file" "$KW_SITE_OWNER" || {
+    kw_log ERROR '.env không còn owner/quyền an toàn sau khi sửa; Deploy sẽ từ chối file này.'
+    return 2
+  }
 )
 
 kw_laravel_vhost_template() {
@@ -212,9 +733,9 @@ kw_laravel_deploy_locked() (
      -L $KW_SITE_ENABLED && $(readlink -- "$KW_SITE_ENABLED") == "$KW_SITE_VHOST" ]] || return 2
   kw_laravel_vhost_kind "$domain" "$id" || return 2
   kind=$KW_LARAVEL_VHOST_KIND; first=$KW_LARAVEL_FIRST
-  [[ -f $shared/.env && ! -L $shared/.env &&
-     $(stat -c '%U:%a' -- "$shared/.env") == "$owner:600" ]] || {
-    kw_log ERROR 'Thiếu deploy/shared/.env an toàn; dùng menu Sửa .env trước.'; return 2;
+  kw_laravel_env_safe "$shared/.env" "$owner" || {
+    kw_log ERROR 'deploy/shared/.env thiếu hoặc owner/quyền chưa an toàn; dùng menu Sửa .env trước (Deploy không tự sửa file).'
+    return 2
   }
   if ((first)); then
     [[ ! -e $current && ! -L $current ]] || return 2
@@ -350,6 +871,7 @@ kw_laravel_with_lock() (
     flock -n 8 || return 1
   fi
   case "$action" in
+    deploy-key) kw_laravel_deploy_key_prepare "$domain" ;;
     clone) kw_laravel_clone_locked "$domain" "$@" ;;
     pull) kw_laravel_pull_locked "$domain" "$@" ;;
     env) kw_laravel_env_edit_locked "$domain" ;;
@@ -362,13 +884,33 @@ kw_laravel_interactive() {
   local action=$1 domain url branch frontend choice
   kw_site_prompt_domain || return 0
   domain=$KW_SITE_CHOICE
-  kw_laravel_layout_ready "$domain" || return 2
+  if [[ $action != status ]]; then kw_laravel_layout_ready "$domain" || return 2; fi
   case "$action" in
-    status) kw_laravel_status "$domain" ;;
+    status) kw_laravel_status_interactive "$domain" ;;
     clone)
       kw_prompt_validated 'Git URL (HTTPS công khai hoặc git@host): ' kw_laravel_git_url_valid \
         'Không chứa token/userinfo/query' plain || return 0
       url=$KW_PROMPT_VALUE
+      if [[ $url == git@* || $url == ssh://git@* ]]; then
+        kw_laravel_with_lock deploy-key "$domain" || return 2
+        if [[ $url == git@github.com:* || $url == ssh://git@github.com/* ]]; then
+          printf 'GitHub: vào repository → Settings → Deploy keys → Add deploy key, dán key công khai phía trên.\n'
+          printf 'Chỉ cần quyền đọc; không bật Allow write access. KwVPS không tự gửi key lên GitHub.\n'
+          printf 'Nếu SSH hỏi xác nhận máy chủ GitHub lần đầu, đối chiếu fingerprint tại\n'
+          printf 'https://docs.github.com/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints\n'
+        else
+          printf 'Thêm key công khai vào mục Deploy keys của Git host tương ứng (chỉ đọc).\n'
+        fi
+        while :; do
+          printf 'Thêm key xong, nhấn Enter để tiếp tục; nhập 0 để quay lại: '
+          IFS= read -r choice || return 0
+          case "$choice" in
+            '') break ;;
+            0) return 0 ;;
+            *) printf 'Chỉ nhấn Enter hoặc nhập 0.\n' ;;
+          esac
+        done
+      fi
       kw_prompt_validated 'Nhánh (ví dụ main): ' kw_laravel_branch_valid 'Tên nhánh Git hợp lệ' plain || return 0
       branch=$KW_PROMPT_VALUE
       kw_prompt_yes_no_token "Clone $branch vào source/ của $domain?" "$domain" || return 0

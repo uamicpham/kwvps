@@ -224,6 +224,7 @@ kw_menu() {
       if ((code != 0 && code != 3)); then
         printf 'Không hoàn thành truy vấn (mã %d); xem thông báo phía trên.\n' "$code"
       fi
+      if [[ $action == laravel-status && $code == 0 ]]; then continue; fi
       printf '\nEnter để quay lại: '
       if ! IFS= read -r choice; then exit 0; fi
     fi

@@ -2,7 +2,7 @@
 
 ## Trạng thái
 
-Ghi chú phát hành [0.50.7](RELEASE-NOTES-0.50.7.md) mô tả thay đổi sau bản [0.50.6](https://github.com/uamicpham/kwvps/releases/tag/v0.50.6) tại `uamicpham/kwvps`. Chỉ coi một tag là bản công khai sau khi workflow tạo GitHub Release và tài sản tải về thành công. README có lệnh cài ngắn tự lấy release mới nhất và lệnh ghim tag/checksum để kiểm soát chặt hơn. VPS đã cài có thể chọn **Quản lý Update → Kiểm tra / cập nhật KwVPS**; gói được xác minh bằng SHA-256 từ GitHub API trước khi áp dụng. Bản cài mới chỉ hỗ trợ VPS Ubuntu Server 24.04 sạch, x86_64 và systemd; không cài đè LarVPS hay web stack khác.
+Ghi chú phát hành [0.50.10](RELEASE-NOTES-0.50.10.md) mô tả bản hiện tại tại `uamicpham/kwvps`. Chỉ coi một tag là bản công khai sau khi workflow tạo GitHub Release và tài sản tải về thành công. README có lệnh cài ngắn tự lấy release mới nhất và lệnh ghim tag/checksum để kiểm soát chặt hơn. VPS đã cài có thể chọn **Quản lý Update → Kiểm tra / cập nhật KwVPS**; gói được xác minh bằng SHA-256 từ GitHub API trước khi áp dụng. Bản cài mới chỉ hỗ trợ VPS Ubuntu Server 24.04 sạch, x86_64 và systemd; không cài đè LarVPS hay web stack khác.
 
 ## Chuẩn bị GitHub
 
