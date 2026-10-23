@@ -247,7 +247,7 @@ kw_cf_token_save_interactive() {
 }
 
 kw_cf_zone_token_save() (
-  local domain=${1,,} zone=${2,,} token=${3:-} confirm=${4:-} dir=/etc/kwvps/cloudflare path stage config response zone_name
+  local domain=${1,,} zone=${2,,} token=${3:-} confirm=${4:-} dir=/etc/kwvps/cloudflare path zone_stage='' config response zone_name
   [[ $confirm == "SAVE-CF-ZONE:$domain:$zone" ]] &&
     kw_domain_valid "$domain" && kw_cf_zone_id_valid "$zone" && kw_cf_token_valid "$token" || return 2
   ((EUID == 0)) && kw_os_supported '' && kw_site_lookup "$domain" || return 2
@@ -259,7 +259,7 @@ kw_cf_zone_token_save() (
   }
   kw_cf_token_verify "$token" || return 2
   config=$(mktemp /run/kwvps-cf-verify-zone.XXXXXXXX) || return 1
-  trap 'rm -f -- "$config" "${stage:-}"' EXIT
+  trap 'rm -f -- "$config"; [[ -z $zone_stage ]] || rm -f -- "$zone_stage"' EXIT
   chmod 0600 -- "$config" || return 1
   printf 'header = "Authorization: Bearer %s"\n' "$token" > "$config" || return 1
   response=$(curl -fsS --proto '=https' --tlsv1.2 --connect-timeout 8 --max-time 25 \
@@ -274,11 +274,11 @@ kw_cf_zone_token_save() (
   [[ ! -e $path && ! -L $path ]] || {
     [[ -f $path && ! -L $path && $(stat -c %u:%a -- "$path") == 0:600 ]] || return 2;
   }
-  stage=$(mktemp "$dir/.token-zone.XXXXXXXX") || return 1
-  chmod 0600 -- "$stage" || return 1
-  printf '%s\n' "$token" > "$stage" || return 1
-  mv -T -- "$stage" "$path" || return 1
-  stage=''
+  zone_stage=$(mktemp "$dir/.token-zone.XXXXXXXX") || return 1
+  chmod 0600 -- "$zone_stage" || return 1
+  printf '%s\n' "$token" > "$zone_stage" || return 1
+  mv -T -- "$zone_stage" "$path" || return 1
+  zone_stage=''
   kw_cf_zone_cache_save "$domain" "$zone" || return 2
   printf 'Đã lưu token riêng cho zone %s (%s); không hiển thị giá trị.\n' "$zone_name" "$zone"
 )
@@ -643,9 +643,9 @@ kw_cf_antiddos_apply() (
      $(stat -c %u:%a -- /etc/kwvps/cloudflare) == 0:700 ]] || {
     kw_log ERROR 'Thư mục /etc/kwvps/cloudflare phải thuộc root:root, quyền 0700 và không là symlink.'; return 2;
   }
-  kw_has nginx && kw_has flock && kw_has mktemp && kw_has systemctl || {
+  if ! kw_has nginx || ! kw_has flock || ! kw_has mktemp || ! kw_has systemctl; then
     kw_log ERROR 'Thiếu nginx, flock, mktemp hoặc systemctl.'; return 2;
-  }
+  fi
   ingress=$(kw_tunnel_site_mode "$domain") || {
     kw_log ERROR 'Không đọc được chế độ DNS/Tunnel của site; kiểm tra metadata ingress.'; return 2;
   }
@@ -653,9 +653,9 @@ kw_cf_antiddos_apply() (
     kw_log ERROR 'Site dùng Tunnel hoặc chưa phân loại ingress; chọn DNS thông thường trong menu Tunnel trước khi bật rate limit local.'
     return 2
   fi
-  nginx -t && systemctl is-active --quiet nginx || {
+  if ! nginx -t || ! systemctl is-active --quiet nginx; then
     kw_log ERROR 'Cấu hình Nginx hiện không hợp lệ hoặc service chưa chạy; chưa áp rate limit.'; return 2;
-  }
+  fi
   exec 9>/run/lock/kwvps-cloudflare.lock || return 2
   flock -n 9 || return 1
   ingress=$(kw_tunnel_site_mode "$domain") || {
