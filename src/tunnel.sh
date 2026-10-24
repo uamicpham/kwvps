@@ -203,6 +203,7 @@ kw_tunnel_site_mode_set() (
     printf '%s\n' "$mode" > "$stage" || return 1
     mv -T -- "$stage" "$path" || return 1
     stage=''
+    # shellcheck disable=SC2034 # Read by the EXIT rollback trap.
     changed_mode=1
   fi
   if ((changed_vhost)); then kw_nginx_test_restart || return 1; fi
