@@ -938,10 +938,14 @@ kw_laravel_health() {
     code=$(curl --silent --show-error --noproxy '*' --max-time 12 \
       --resolve "$domain:443:127.0.0.1" -o /dev/null -w '%{http_code}' "$url") || return 1
   fi
-  [[ $code =~ ^[1-4][0-9][0-9]$ ]] || {
+  [[ $code =~ ^[1-4][0-9][0-9]$ || $code == 503 ]] || {
     kw_log ERROR "Health check trả HTTP $code; sẽ quay lại release cũ."; return 1;
   }
-  printf 'Health check %s: HTTP %s\n' "$domain" "$code"
+  if [[ $code == 503 ]]; then
+    printf 'Health check %s: HTTP 503 (chế độ bảo trì / maintenance mode)\n' "$domain"
+  else
+    printf 'Health check %s: HTTP %s\n' "$domain" "$code"
+  fi
 }
 
 kw_laravel_deploy_locked() (
