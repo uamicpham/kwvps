@@ -1,4 +1,4 @@
-# Trạng thái chức năng KwVPS (mã nguồn 0.50.17)
+# Trạng thái chức năng KwVPS (mã nguồn 0.50.18)
 
 Đây là danh sách **đã kiểm chứng**, không phải cam kết production. Xem [tiến độ và bằng chứng thử nghiệm](PROGRESS.md), [hướng dẫn/đặc tả toàn tập](KWVPS-HUONG-DAN-VA-DAC-TA.md) và [hướng dẫn VPS thử nghiệm](THU-NGHIEM-VPS.md). VPS LarVPS có website thật không thuộc phạm vi thử.
 
