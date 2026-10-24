@@ -827,7 +827,7 @@ kw_site_permissions_plan() {
   kw_site_lookup "$domain" || return 2
   printf 'Phân lại quyền sở hữu source của %s:\n' "$domain"
   printf '  Đường dẫn: %s\n  Chủ sở hữu: %s:www-data\n' "$KW_SITE_ROOT" "$KW_SITE_OWNER"
-  printf '  Hỗ trợ symlink nội bộ (Laravel/Node); từ chối symlink trỏ ngoài site hoặc hardlink.\n'
+  printf '  Hỗ trợ symlink nội bộ (Laravel/Node); từ chối symlink trỏ ngoài site.\n'
   printf '  Ghi manifest owner/group cũ vào %s.\n' "$KW_BACKUP_ROOT"
 }
 
@@ -837,9 +837,6 @@ kw_site_permissions_apply_locked() (
   kw_backup_source_preflight "$domain" || return 2
   id=${KW_SITE_OWNER#kw}
   [[ ! -L $KW_SITE_ROOT ]] || return 2
-  if [[ -n $(find -P "$KW_SITE_ROOT" -xdev -type f -links +1 -print -quit) ]]; then
-    kw_log ERROR 'Source có hardlink; từ chối đổi owner hàng loạt để tránh ảnh hưởng ngoài site.'; return 2;
-  fi
   local safe_symlinks=0
   if python3 - "$KW_SITE_ROOT" <<'PY'
 import os, sys
