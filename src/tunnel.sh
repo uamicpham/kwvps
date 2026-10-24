@@ -460,7 +460,9 @@ kw_tunnel_inbound_change() (
     done
     for port in 80 443; do
       mapfile -t numbers < <(kw_fw_rule_numbers port-deny "$port" tcp)
-      ((${#numbers[@]} > 0)) || { kw_log ERROR "Không xác minh được DENY $port/tcp."; return 1; }
+      ((${#numbers[@]} > 0)) || kw_fw_port_has_action "$port" tcp DENY || {
+        kw_log ERROR "Không xác minh được DENY $port/tcp."; return 1;
+      }
     done
     if [[ -n $renewals ]]; then
       printf 'Đang thử gia hạn ACME qua Tunnel khi inbound đã đóng...\n'

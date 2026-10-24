@@ -1,5 +1,21 @@
 # Tiến độ KwVPS
 
+## 0.50.13 — 24/10/2026
+
+- **Quản lý site & Phân quyền:**
+  - Hỗ trợ an toàn symlink nội bộ trong site root khi phân lại quyền (`kw_site_permissions`); kiểm tra chống vượt khỏi `$KW_SITE_ROOT` bằng script Python; không còn từ chối các site chứa symlink nội bộ của Laravel (`deploy/current`, `deploy/shared/storage`, `.env`).
+  - Tự động phân quyền bảo mật chuyên sâu cho Laravel: gán `0600` cho `deploy/shared/.env` (chỉ user site sở hữu) và `0750` cho thư mục / `0660` cho file trong `deploy/shared/storage` (nhóm `www-data` ghi log/cache).
+  - Loại bỏ rào cản hardlink (`-type f -links +1`) để tương thích trơn tru với các dự án frontend dùng `pnpm`, Git hoặc file giải nén có nhiều liên kết.
+- **Triển khai Laravel:**
+  - Khắc phục tìm kiếm gói NodeSource cô lập (`kw_laravel_nodesource_isolated_candidate`): thêm cờ `-o Dir::Cache::pkgcache=`, tạo thư mục `partial/` tạm và hỗ trợ regex URL có dấu gạch chéo cuối.
+  - Cho phép mã phản hồi HTTP 503 trong health check sau deploy (`kw_laravel_health`) để nhận diện chính xác chế độ bảo trì (Maintenance Mode) của Laravel thay vì kích hoạt rollback nhầm.
+  - Bổ sung đầy đủ các PHP extensions chuẩn vào bộ cài đặt ban đầu trong `install.sh` (`mysql`, `mbstring`, `xml`, `curl`, `zip`, `gd`, `intl`, `bcmath`).
+- **Firewall UFW & Tunnel Inbound:**
+  - Bảo vệ SSH thông minh khi kích hoạt UFW (`kw_fw_ssh_ports`): tự động đọc cổng lắng nghe từ socket systemd (`systemctl show ssh.socket -p Listen`) kết hợp với cấu hình `sshd_config`; không còn từ chối bật UFW trên Ubuntu 24.04 khi chạy lệnh qua `sudo` làm mất biến `$SSH_CONNECTION`.
+  - Cơ chế dự phòng khi bảng rule UFW trống: tự động chuyển từ `ufw insert 1` sang `ufw allow` / `ufw deny` thông thường, loại bỏ triệt để lỗi `ERROR: Invalid position '1'`.
+  - Menu Inbound 80/443 hiển thị thông báo rõ ràng cho người dùng khi UFW đang tắt trước khi yêu cầu xác nhận `y/N`.
+  - Smoke test cục bộ nâng lên 628/628 checks đạt PASS.
+
 ## 0.50.12 — 24/10/2026
 
 - Cải thiện kiểm tra và thông báo lỗi cho menu Cập nhật Cloudflare Real IP: kiểm tra quyền root ngay khi vào menu tương tác, cảnh báo chạy `sudo kwvps`.

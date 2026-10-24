@@ -156,7 +156,7 @@ kw_fw_rule_numbers() {
   esac
   status=$(LC_ALL=C ufw status numbered) || return 2
   while IFS= read -r line; do
-    [[ $line == *"# $marker" ]] || continue
+    [[ $line == *"# $marker"* ]] || continue
     if [[ $kind == port || $kind == port-deny ]]; then
       [[ $line == *"${value}/${proto}"* ]] || continue
       if [[ $kind == port ]]; then
@@ -266,7 +266,9 @@ kw_fw_port_change() (
   ufw insert 1 deny "${port}/${proto}" comment "kwvps-port-deny-${port}-${proto}" 2>/dev/null ||
     ufw deny "${port}/${proto}" comment "kwvps-port-deny-${port}-${proto}" || return 1
   mapfile -t numbers < <(kw_fw_rule_numbers port-deny "$port" "$proto")
-  ((${#numbers[@]} > 0)) || { kw_log ERROR 'Không xác minh được rule DENY vừa áp.'; return 1; }
+  ((${#numbers[@]} > 0)) || kw_fw_port_has_action "$port" "$proto" DENY || {
+    kw_log ERROR 'Không xác minh được rule DENY vừa áp.'; return 1;
+  }
   committed=1
   printf 'Đã đặt DENY inbound cho %s/%s; rule ALLOW có sẵn được giữ nguyên.\n' "$port" "$proto"
 )
