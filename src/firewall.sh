@@ -179,7 +179,7 @@ kw_fw_port_has_action() {
   [[ $action == ALLOW || $action == DENY ]] || return 2
   status=$(LC_ALL=C ufw status numbered) || return 2
   while IFS= read -r line; do
-    if [[ $line =~ ^\[[[:space:]]*[0-9]+\][[:space:]]+${port}/${proto}([[:space:]]+\(v6\))?[[:space:]]+${action}[[:space:]]+IN[[:space:]] ]]; then
+    if [[ $line =~ ^\[[[:space:]]*[0-9]+\][[:space:]]+${port}(/${proto})?([[:space:]]+\(v6\))?[[:space:]]+${action}([[:space:]]+IN)?[[:space:]] ]]; then
       return 0
     fi
   done <<< "$status"

@@ -454,8 +454,8 @@ kw_tunnel_inbound_change() (
     for port in 80 443; do
       mapfile -t numbers < <(kw_fw_rule_numbers port-deny "$port" tcp)
       ((${#numbers[@]} > 0)) && continue
-      ufw insert 1 deny "$port/tcp" comment "kwvps-port-deny-$port-tcp" 2>/dev/null ||
-        ufw deny "$port/tcp" comment "kwvps-port-deny-$port-tcp" || return 1
+      ufw insert 1 deny "$port/tcp" comment "kwvps-port-deny-$port-tcp" >/dev/null 2>&1 ||
+        ufw deny "$port/tcp" comment "kwvps-port-deny-$port-tcp" >/dev/null 2>&1 || true
       created_ports+=("$port")
     done
     for port in 80 443; do
