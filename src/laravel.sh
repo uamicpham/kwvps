@@ -1110,6 +1110,7 @@ kw_laravel_deploy_locked() (
   fi
   trap 'if ((!success && migration_attempted)); then kw_log WARN "Migration có thể đã thay đổi database; rollback release không hoàn tác dữ liệu."; fi; if ((activated && ! success)); then if [[ -n $previous ]]; then ln -sfn -- "$previous" "$next" && mv -Tf -- "$next" "$current" || kw_log ERROR "Không thể quay lại release cũ: $current"; else rm -f -- "$current" || kw_log ERROR "Không thể bỏ current: $current"; fi; if [[ -n $vhost_backup ]]; then install -m 0644 -o root -g root -- "$vhost_backup" "$KW_SITE_VHOST" || kw_log ERROR "Cần phục hồi vhost từ $vhost_backup"; fi; kw_nginx_test_restart || kw_log ERROR "Cần kiểm tra Nginx sau rollback: $domain"; fi; [[ -z $vhost_temp ]] || rm -f -- "$vhost_temp"; [[ -z $next ]] || rm -f -- "$next"' EXIT
   if ((migrate)); then
+    # shellcheck disable=SC2034 # Read by the EXIT rollback warning trap.
     migration_attempted=1
     kw_laravel_run_migrations "$owner" "$php" "$release" || return 1
   fi
