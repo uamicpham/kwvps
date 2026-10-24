@@ -136,7 +136,7 @@ install_apply() {
   install_preflight || result=$?
   if ((result == 10)); then return 0; fi
   ((result == 0)) || return 2
-  printf '\nSẽ cài Nginx, PHP 8.3 FPM/CLI, MariaDB, Fail2ban, UFW, cron, nano, curl, git, zip, unzip và KwVPS. Không bật UFW, cấu hình DNS hay SSL.\n'
+  printf '\nSẽ cài Nginx, PHP 8.3 FPM/CLI cùng extensions, MariaDB, Fail2ban, UFW, cron, nano, curl, git, zip, unzip và KwVPS. Không bật UFW, cấu hình DNS hay SSL.\n'
   printf 'Nhập INSTALL KWVPS để xác nhận: '
   [[ -r /dev/tty ]] || { printf 'Cần terminal tương tác.\n' >&2; return 2; }
   IFS= read -r phrase < /dev/tty || return 2
@@ -150,7 +150,7 @@ install_apply() {
     printf 'DỪNG: PHP 8.3 ứng viên (%s) chưa có bản vá RCE được xác minh. Cần gói Ubuntu 24.04 .13 trở lên hoặc upstream 8.3.36 trở lên.\n' "$candidate" >&2
     return 2
   fi
-  apt-get install -y nginx php8.3-fpm php8.3-cli mariadb-server fail2ban ufw cron nano curl git zip unzip || {
+  apt-get install -y nginx php8.3-fpm php8.3-cli php8.3-mysql php8.3-mbstring php8.3-xml php8.3-curl php8.3-zip php8.3-gd php8.3-intl php8.3-bcmath mariadb-server fail2ban ufw cron nano curl git zip unzip || {
     printf 'ERROR: Cài package thất bại; cần kiểm tra APT trước khi chạy lại KwVPS.\n' >&2
     return 1
   }
