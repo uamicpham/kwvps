@@ -94,20 +94,20 @@ kw_tunnel_collect_connectors() {
     kw_tunnel_site_paths "$domain" || return 2
     [[ $KW_TUNNEL_SITE_ID == "$id" ]] || return 2
     if kw_tunnel_site_connector_present "$domain"; then
-      kw_tunnel_site_service_owned "$domain" && kw_tunnel_site_token_safe "$domain" || {
+      if ! kw_tunnel_site_service_owned "$domain" || ! kw_tunnel_site_token_safe "$domain"; then
         kw_log ERROR "Connector của $domain có file hoặc quyền không an toàn; cần kiểm tra thủ công."
         return 2
-      }
+      fi
       KW_TUNNEL_CONNECTOR_UNITS+=("$KW_TUNNEL_SITE_UNIT_NAME")
       KW_TUNNEL_CONNECTOR_LABELS+=("$domain")
     fi
   done
   if [[ -e $KW_TUNNEL_UNIT || -L $KW_TUNNEL_UNIT ||
         -e $KW_TUNNEL_TOKEN || -L $KW_TUNNEL_TOKEN ]]; then
-    kw_tunnel_service_owned && kw_tunnel_legacy_token_safe || {
+    if ! kw_tunnel_service_owned || ! kw_tunnel_legacy_token_safe; then
       kw_log ERROR 'Connector chung cũ có file hoặc quyền không an toàn; cần kiểm tra thủ công.'
       return 2
-    }
+    fi
     KW_TUNNEL_CONNECTOR_UNITS+=(cloudflared.service)
     KW_TUNNEL_CONNECTOR_LABELS+=('Connector chung cũ')
   fi
@@ -144,7 +144,9 @@ kw_tunnel_choose_connector() {
   IFS= read -r choice || return 1
   [[ $choice =~ ^[0-9]+$ ]] || return 1
   ((choice >= 1 && choice <= ${#KW_TUNNEL_CONNECTOR_UNITS[@]})) || return 1
+  # shellcheck disable=SC2034 # Read by system.sh menu actions.
   KW_TUNNEL_CHOICE_UNIT=${KW_TUNNEL_CONNECTOR_UNITS[choice-1]}
+  # shellcheck disable=SC2034 # Read by system.sh menu actions.
   KW_TUNNEL_CHOICE_LABEL=${KW_TUNNEL_CONNECTOR_LABELS[choice-1]}
 }
 
@@ -598,18 +600,22 @@ kw_tunnel_site_remove() (
   kw_site_lookup "$domain" && kw_tunnel_site_paths "$domain" || return 2
   kw_tunnel_site_service_owned "$domain" && kw_tunnel_site_token_safe "$domain" || return 2
   [[ $(kw_tunnel_site_mode "$domain") == dns ]] || return 2
+  # shellcheck disable=SC2034 # Rollback trap reads prior service state.
   systemctl is-active --quiet "$KW_TUNNEL_SITE_UNIT_NAME" && was_active=1
+  # shellcheck disable=SC2034 # Rollback trap reads prior enable state.
   systemctl is-enabled --quiet "$KW_TUNNEL_SITE_UNIT_NAME" && was_enabled=1
   stage=$(mktemp -d /run/kwvps-site-tunnel-remove.XXXXXXXX) || return 1
   trap 'if ((touched && ! committed)); then cp -p -- "$stage/token" "$KW_TUNNEL_SITE_TOKEN" || kw_log ERROR "Cần khôi phục token $domain"; cp -p -- "$stage/unit" "$KW_TUNNEL_SITE_UNIT" || kw_log ERROR "Cần khôi phục service $domain"; systemctl daemon-reload || true; if ((was_enabled)); then systemctl enable "$KW_TUNNEL_SITE_UNIT_NAME" >/dev/null || true; fi; if ((was_active)); then systemctl restart "$KW_TUNNEL_SITE_UNIT_NAME" || kw_log ERROR "Cần khởi động lại connector $domain"; fi; fi; if [[ -n $stage ]]; then rm -f -- "$stage/token" "$stage/unit"; rmdir -- "$stage" || true; fi' EXIT
   chmod 0700 -- "$stage" || return 1
   cp -p -- "$KW_TUNNEL_SITE_TOKEN" "$stage/token" || return 1
   cp -p -- "$KW_TUNNEL_SITE_UNIT" "$stage/unit" || return 1
+  # shellcheck disable=SC2034 # Rollback trap reads mutation marker.
   touched=1
   systemctl disable --now "$KW_TUNNEL_SITE_UNIT_NAME" || return 1
   rm -f -- "$KW_TUNNEL_SITE_UNIT" "$KW_TUNNEL_SITE_TOKEN" || return 1
   systemctl daemon-reload || return 1
   systemctl is-active --quiet "$KW_TUNNEL_SITE_UNIT_NAME" && return 1
+  # shellcheck disable=SC2034 # Rollback trap reads commit marker.
   committed=1
   printf 'Đã gỡ connector và token riêng của %s. Connector chung cũ không thay đổi.\n' "$domain"
 )
