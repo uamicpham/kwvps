@@ -78,7 +78,8 @@ kw_fw_enable_safe() {
   printf 'UFW đang tắt. Bảo vệ cổng SSH trước khi bật: %s\n' "$(tr '\n' ' ' <<< "$ports")"
   while IFS= read -r port; do
     kw_port_valid "$port" || return 2
-    ufw insert 1 allow "${port}/tcp" comment "kwvps-ssh-guard-${port}" || return 1
+    ufw insert 1 allow "${port}/tcp" comment "kwvps-ssh-guard-${port}" 2>/dev/null ||
+      ufw allow "${port}/tcp" comment "kwvps-ssh-guard-${port}" || return 1
   done <<< "$ports"
   if ! ufw --force enable; then
     ufw --force disable >/dev/null 2>&1 || kw_log ERROR 'Không tắt lại được UFW sau lỗi bật; kiểm tra console cứu hộ.'
@@ -201,7 +202,8 @@ kw_fw_port_plan() {
 kw_fw_port_rollback() {
   ((committed == 0)) || return 0
   if ((rollback_deny)); then
-    ufw insert 1 deny "${port}/${proto}" comment "kwvps-port-deny-${port}-${proto}" ||
+    ufw insert 1 deny "${port}/${proto}" comment "kwvps-port-deny-${port}-${proto}" 2>/dev/null ||
+      ufw deny "${port}/${proto}" comment "kwvps-port-deny-${port}-${proto}" ||
       kw_log ERROR "Không phục hồi được DENY $port/$proto; kiểm tra UFW thủ công."
   fi
   if ((was_inactive)); then
@@ -261,7 +263,8 @@ kw_fw_port_change() (
     printf 'Cổng %s/%s đã có rule chặn KwVPS.\n' "$port" "$proto"
     return 0
   fi
-  ufw insert 1 deny "${port}/${proto}" comment "kwvps-port-deny-${port}-${proto}" || return 1
+  ufw insert 1 deny "${port}/${proto}" comment "kwvps-port-deny-${port}-${proto}" 2>/dev/null ||
+    ufw deny "${port}/${proto}" comment "kwvps-port-deny-${port}-${proto}" || return 1
   mapfile -t numbers < <(kw_fw_rule_numbers port-deny "$port" "$proto")
   ((${#numbers[@]} > 0)) || { kw_log ERROR 'Không xác minh được rule DENY vừa áp.'; return 1; }
   committed=1
@@ -290,7 +293,8 @@ kw_fw_ip_change() {
     while IFS= read -r line; do
       [[ $line != *" $ip"* ]] || { kw_log ERROR 'IP đã có rule; không tự ghi đè.'; return 2; }
     done <<< "$status"
-    ufw insert 1 deny from "$ip" comment "kwvps-block-${ip//./-}"
+    ufw insert 1 deny from "$ip" comment "kwvps-block-${ip//./-}" 2>/dev/null ||
+      ufw deny from "$ip" comment "kwvps-block-${ip//./-}"
     return
   fi
   mapfile -t numbers < <(kw_fw_rule_numbers ip "$ip" | sort -nr)

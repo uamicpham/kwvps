@@ -400,7 +400,8 @@ kw_tunnel_inbound_rollback() {
     for port in "${removed_ports[@]}"; do
       mapfile -t numbers < <(kw_fw_rule_numbers port-deny "$port" tcp)
       ((${#numbers[@]} == 0)) || continue
-      ufw insert 1 deny "$port/tcp" comment "kwvps-port-deny-$port-tcp" ||
+      ufw insert 1 deny "$port/tcp" comment "kwvps-port-deny-$port-tcp" 2>/dev/null ||
+        ufw deny "$port/tcp" comment "kwvps-port-deny-$port-tcp" ||
         kw_log ERROR "Không phục hồi được DENY $port/tcp; kiểm tra UFW thủ công."
     done
   fi
@@ -453,7 +454,8 @@ kw_tunnel_inbound_change() (
     for port in 80 443; do
       mapfile -t numbers < <(kw_fw_rule_numbers port-deny "$port" tcp)
       ((${#numbers[@]} > 0)) && continue
-      ufw insert 1 deny "$port/tcp" comment "kwvps-port-deny-$port-tcp" || return 1
+      ufw insert 1 deny "$port/tcp" comment "kwvps-port-deny-$port-tcp" 2>/dev/null ||
+        ufw deny "$port/tcp" comment "kwvps-port-deny-$port-tcp" || return 1
       created_ports+=("$port")
     done
     for port in 80 443; do
