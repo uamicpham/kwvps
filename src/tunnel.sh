@@ -220,14 +220,34 @@ kw_tunnel_site_mode_interactive() {
   kw_site_prompt_domain || return 0
   domain=$KW_SITE_CHOICE
   current=$(kw_tunnel_site_mode "$domain") || return 2
-  printf '%s đang ghi nhận: %s\n1. Tunnel\n2. DNS thông thường (DNS only hoặc đám mây cam)\n0. Quay lại\nChọn: ' "$domain" "$current"
-  [[ $current != unknown ]] || printf '\nChưa phân loại vì cloudflared đang chạy; kiểm tra route trên Dashboard trước khi chọn.\n'
+  printf '%s đang ghi nhận: %s\n' "$domain" "$current"
+  [[ $current != unknown ]] || printf 'Chưa phân loại vì cloudflared đang chạy; kiểm tra route trên Dashboard trước khi chọn.\n'
+  printf '1. Tunnel\n2. DNS thông thường (DNS only hoặc đám mây cam)\n0. Quay lại\nChọn: '
   local choice
   IFS= read -r choice || return 0
   case "$choice" in 1) mode=tunnel ;; 2) mode=dns ;; *) return 0 ;; esac
   printf 'Chỉ cập nhật trạng thái KwVPS; không tự tạo/xóa route hay DNS trên Cloudflare.\n'
   kw_prompt_yes_no_token "Ghi chế độ $mode cho $domain?" "INGRESS:$domain:$mode" || return 0
   kw_tunnel_site_mode_set "$domain" "$mode" "$KW_PROMPT_VALUE"
+}
+
+kw_tunnel_post_config_interactive() {
+  local domain current
+  printf 'Một Tunnel token chạy một cloudflared.service trên VPS; nhiều site cùng tài khoản Cloudflare có thể dùng các route hostname riêng.\n'
+  printf 'Chỉ chọn site đã tạo route tới VPS trong Cloudflare Dashboard; 0 để bỏ qua.\n'
+  kw_site_prompt_domain || return 0
+  domain=$KW_SITE_CHOICE
+  current=$(kw_tunnel_site_mode "$domain") || return 2
+  if [[ $current == tunnel ]]; then
+    printf '%s đã được ghi nhận là Tunnel; không thay đổi.\n' "$domain"
+    return 0
+  fi
+  printf 'KwVPS không tự tạo route/DNS; site chưa có route thật có thể không truy cập được.\n'
+  kw_prompt_yes_no_token "Bật chế độ Tunnel và Real IP cho $domain?" "INGRESS:$domain:tunnel" || return 0
+  kw_tunnel_site_mode_set "$domain" tunnel "$KW_PROMPT_VALUE" || {
+    kw_log WARN 'Token/service đã lưu, nhưng chưa đổi chế độ site; dùng mục 4 sau khi xử lý lỗi.'
+    return 1
+  }
 }
 
 kw_tunnel_render_unit() {
@@ -321,14 +341,17 @@ kw_tunnel_guide() {
   printf '%s\n' \
     '1) Cloudflare Dashboard → Networking → Tunnels → Create Tunnel → chọn loại Cloudflared.' \
     '2) Tạo Tunnel quản lý trên Cloudflare, sao chép riêng Tunnel token (không dán cả lệnh cài).' \
-    '3) Quay lại mục này, chọn cấu hình service và dán token khi được hỏi; không gửi token qua chat.' \
+    '3) Chọn lưu token Tunnel dùng chung cho VPS và cấu hình service; không gửi token qua chat.' \
     '4) Trong Tunnel → Routes → Add route → Published application: chọn hostname của site KwVPS.' \
+    '   Sau khi route hoạt động, ghi nhận chế độ Tunnel cho riêng site đó ở mục 4.' \
     '5) Site HTTP: Service URL http://127.0.0.1:80. Site HTTPS: https://127.0.0.1:443,' \
     '   đặt Origin Server Name bằng hostname thật để xác minh chứng chỉ; không bật Disable TLS verification.' \
     '6) Thử hostname từ ngoài và kiểm tra log. Có thể đóng inbound 80/443 sau khi mọi route,' \
     '   site và gia hạn SSL đã kiểm chứng; Nginx vẫn nghe local, cloudflared cần outbound 7844.' \
-    '   KwVPS không tự đóng cổng. Tắt anti-DDoS local trước: Real IP qua Tunnel chưa xác minh.' \
-    'Tunnel token khác API token Cloudflare ở menu Bảo mật/Cloudflare.'
+    '   KwVPS không tự đóng cổng. Tắt anti-DDoS local trước khi chuyển site sang Tunnel.' \
+    'Một Tunnel token có thể phục vụ nhiều site trong cùng tài khoản Cloudflare.' \
+    'Site thuộc tài khoản Cloudflare khác cần connector/token riêng; KwVPS chưa quản lý nhiều connector.' \
+    'Tunnel token khác API token Cloudflare theo site ở menu Bảo mật/Cloudflare.'
   if [[ ${1:-} != --no-site-prompt ]] && kw_site_prompt_domain; then
     if kw_site_lookup "$KW_SITE_CHOICE" && [[ -f $KW_SITE_VHOST ]] &&
        grep -Eq 'ssl_certificate[[:space:]]' "$KW_SITE_VHOST"; then
@@ -359,7 +382,7 @@ kw_tunnel_config_interactive() {
   fi
   printf 'Đã cài: '
   /usr/bin/cloudflared --version || return 2
-  printf '1. Hướng dẫn tạo Tunnel và route theo site\n2. Lưu/thay Tunnel token và cấu hình service\n3. Kiểm tra trạng thái service\n4. Ghi nhận chế độ từng site\n0. Quay lại\nChọn: '
+  printf '1. Hướng dẫn tạo Tunnel và route theo site\n2. Lưu/thay Tunnel token chung VPS và cấu hình service\n3. Kiểm tra trạng thái service\n4. Chế độ kết nối từng site (Tunnel/DNS)\n0. Quay lại\nChọn: '
   IFS= read -r choice || return 0
   case "$choice" in
     1) kw_tunnel_guide ;;
@@ -373,8 +396,12 @@ kw_tunnel_config_interactive() {
         kw_tunnel_token_valid "$token" && break
         printf 'Tunnel token không hợp lệ (40–4096 ký tự, không khoảng trắng). Nhập lại.\n'
       done
+      if [[ -e $KW_TUNNEL_TOKEN || -L $KW_TUNNEL_TOKEN ]]; then
+        printf 'CẢNH BÁO: thay token chung sẽ khởi động lại connector và có thể gián đoạn mọi site đang dùng Tunnel này.\n'
+      fi
       kw_prompt_yes_no_token 'Lưu token và khởi động cloudflared.service?' CONFIGURE-CLOUDFLARED || return 0
-      kw_tunnel_configure "$token" "$KW_PROMPT_VALUE" ;;
+      kw_tunnel_configure "$token" "$KW_PROMPT_VALUE" || return $?
+      kw_tunnel_post_config_interactive ;;
     3) kw_tunnel_status ;;
     4) kw_tunnel_site_mode_interactive ;;
     *) return 0 ;;

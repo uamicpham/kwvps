@@ -66,6 +66,7 @@ setup() {
   [[ "$output" == *"User: kw$id"* ]]
   [[ "$output" == *"Pool: /etc/php/8.3/fpm/pool.d/kwvps-$id.conf"* ]]
   [[ "$output" == *"Vhost: /etc/nginx/sites-available/kwvps-$id.conf"* ]]
+  [[ "$output" == *'Chế độ kết nối: DNS thông thường mặc định'* ]]
 }
 
 @test "site plan rejects unsafe domain and PHP version" {

@@ -68,6 +68,7 @@ kw_site_plan() {
   printf '  User: %s\n  Source: %s\n' "$KW_SITE_OWNER" "$KW_SITE_PUBLIC"
   printf '  Pool: %s\n  Vhost: %s\n' "$KW_SITE_POOL" "$KW_SITE_VHOST"
   printf '  HTTP: cổng 80; chưa có SSL, DNS, DB, cache hoặc firewall rule.\n'
+  printf '  Chế độ kết nối: DNS thông thường mặc định; có thể chuyển riêng site sang Tunnel sau.\n'
   printf '  Tạo user riêng, trang chào và cấu hình Nginx/PHP-FPM rồi health check loopback.\n'
 }
 
@@ -346,7 +347,7 @@ kw_site_php_log_interactive() {
 }
 
 kw_site_preflight() {
-  local domain=$1 php=$2 id=$3 dump path cmd nginx_conflict=0
+  local domain=$1 php=$2 id=$3 dump path cmd nginx_conflict=0 ingress_mode
   kw_os_supported '' || {
     kw_log ERROR 'Chỉ hỗ trợ tạo site trên Ubuntu 24.04.'; return 2;
   }
@@ -378,6 +379,20 @@ kw_site_preflight() {
       kw_log ERROR "Thư mục có quyền ghi không an toàn: $parent"; return 2;
     }
   done
+  if [[ -e /etc/kwvps/ingress || -L /etc/kwvps/ingress ]]; then
+    [[ -d /etc/kwvps/ingress && ! -L /etc/kwvps/ingress &&
+       $(stat -c %u:%a -- /etc/kwvps/ingress) == 0:700 ]] || {
+      kw_log ERROR 'Thư mục nhãn DNS/Tunnel không an toàn.'; return 2;
+    }
+  fi
+  if [[ -e /etc/kwvps/ingress/$domain.mode || -L /etc/kwvps/ingress/$domain.mode ]]; then
+    [[ -f /etc/kwvps/ingress/$domain.mode && ! -L /etc/kwvps/ingress/$domain.mode &&
+       $(stat -c %u:%a -- "/etc/kwvps/ingress/$domain.mode") == 0:600 ]] || {
+      kw_log ERROR 'Nhãn DNS/Tunnel cũ không an toàn; chưa ghi đè.'; return 2;
+    }
+    IFS= read -r ingress_mode < "/etc/kwvps/ingress/$domain.mode" || return 2
+    [[ $ingress_mode == dns || $ingress_mode == tunnel ]] || return 2
+  fi
   if [[ -e $KW_SITE_META || -L $KW_SITE_META ]]; then
     kw_log ERROR "Domain đã tồn tại hoặc tạo cùng site ID ($id): $domain"
     return 2
@@ -465,14 +480,33 @@ kw_nginx_server_name_taken() {
 kw_site_rollback() {
   # Only paths derived from a validated domain and owned by this transaction.
   ((KW_SITE_DONE == 0)) || return 0
+  local ingress_restore_failed=0
   if ((KW_SITE_LINK_CREATED)); then rm -f -- "$KW_SITE_ENABLED"; fi
   if ((KW_SITE_VHOST_CREATED)); then rm -f -- "$KW_SITE_VHOST"; fi
   if ((KW_SITE_POOL_CREATED)); then rm -f -- "$KW_SITE_POOL"; fi
   if ((KW_SITE_META_CREATED)); then rm -f -- "$KW_SITE_META"; fi
+  if ((KW_SITE_INGRESS_TOUCHED)); then
+    if [[ -f $KW_SITE_STAGE/ingress.old ]]; then
+      install -m 0600 -o root -g root -- "$KW_SITE_STAGE/ingress.old" "$KW_SITE_INGRESS" || {
+        kw_log ERROR "Cần phục hồi nhãn ingress từ $KW_SITE_STAGE/ingress.old"
+        ingress_restore_failed=1
+      }
+    else
+      rm -f -- "$KW_SITE_INGRESS" || {
+        kw_log ERROR "Cần gỡ nhãn ingress mới: $KW_SITE_INGRESS"
+        ingress_restore_failed=1
+      }
+    fi
+  fi
   if [[ -n ${KW_SITE_STAGE:-} && -d $KW_SITE_STAGE ]]; then
-    rm -f -- "$KW_SITE_STAGE/pool.conf" "$KW_SITE_STAGE/vhost.conf" "$KW_SITE_STAGE/site.meta"
-    rmdir -- "$KW_SITE_STAGE" 2>/dev/null || \
-      kw_log WARN "Giữ staging tại $KW_SITE_STAGE để kiểm tra thủ công."
+    if ((ingress_restore_failed)); then
+      kw_log WARN "Giữ staging tại $KW_SITE_STAGE để phục hồi thủ công."
+    else
+      rm -f -- "$KW_SITE_STAGE/pool.conf" "$KW_SITE_STAGE/vhost.conf" \
+        "$KW_SITE_STAGE/site.meta" "$KW_SITE_STAGE/ingress.mode" "$KW_SITE_STAGE/ingress.old"
+      rmdir -- "$KW_SITE_STAGE" 2>/dev/null || \
+        kw_log WARN "Giữ staging tại $KW_SITE_STAGE để kiểm tra thủ công."
+    fi
   fi
   if ((KW_SITE_ROOT_CREATED)); then
     rm -f -- "$KW_SITE_PUBLIC/index.html"
@@ -525,6 +559,7 @@ kw_site_apply_locked() (
   local domain=$1 php=$2 id=$3
   local KW_SITE_DONE=0 KW_SITE_LINK_CREATED=0 KW_SITE_VHOST_CREATED=0
   local KW_SITE_POOL_CREATED=0 KW_SITE_META_CREATED=0 KW_SITE_ROOT_CREATED=0
+  local KW_SITE_INGRESS="/etc/kwvps/ingress/$domain.mode" KW_SITE_INGRESS_TOUCHED=0
   # shellcheck disable=SC2030 # This variable belongs to the site-create subshell.
   local KW_SITE_USER_CREATED=0 KW_SITE_PHP=$php KW_SITE_STAGE=''
   kw_site_preflight "$domain" "$php" "$id" || return 2
@@ -566,10 +601,28 @@ kw_site_apply_locked() (
     kw_log ERROR 'Không áp/xác minh được quyền của site mới; đang hoàn tác.'
     return 1
   }
-  rm -f -- "$KW_SITE_STAGE/pool.conf" "$KW_SITE_STAGE/vhost.conf" "$KW_SITE_STAGE/site.meta" || return 1
-  rmdir -- "$KW_SITE_STAGE" || return 1
+  install -d -m 0700 -o root -g root -- /etc/kwvps/ingress || return 1
+  [[ -d /etc/kwvps/ingress && ! -L /etc/kwvps/ingress &&
+     $(stat -c %u:%a -- /etc/kwvps/ingress) == 0:700 ]] || return 2
+  if [[ -e $KW_SITE_INGRESS || -L $KW_SITE_INGRESS ]]; then
+    [[ -f $KW_SITE_INGRESS && ! -L $KW_SITE_INGRESS &&
+       $(stat -c %u:%a -- "$KW_SITE_INGRESS") == 0:600 ]] || return 2
+    cp -p -- "$KW_SITE_INGRESS" "$KW_SITE_STAGE/ingress.old" || return 1
+    kw_log WARN "Đặt lại nhãn ingress cũ của $domain thành DNS cho site mới."
+  fi
+  printf 'dns\n' > "$KW_SITE_STAGE/ingress.mode" || return 1
+  KW_SITE_INGRESS_TOUCHED=1
+  install -m 0600 -o root -g root -- "$KW_SITE_STAGE/ingress.mode" "$KW_SITE_INGRESS" || return 1
+  [[ -f $KW_SITE_INGRESS && ! -L $KW_SITE_INGRESS &&
+     $(stat -c %u:%a -- "$KW_SITE_INGRESS") == 0:600 &&
+     $(< "$KW_SITE_INGRESS") == dns ]] || return 1
   KW_SITE_DONE=1
-  printf 'Đã tạo site %s với PHP-FPM %s. Source thuộc %s:www-data; pool/vhost/metadata thuộc root. Cần cấu hình DNS và SSL riêng.\n' "$domain" "$php" "$KW_SITE_OWNER"
+  rm -f -- "$KW_SITE_STAGE/pool.conf" "$KW_SITE_STAGE/vhost.conf" "$KW_SITE_STAGE/site.meta" \
+    "$KW_SITE_STAGE/ingress.mode" "$KW_SITE_STAGE/ingress.old" ||
+    kw_log WARN "Giữ staging tại $KW_SITE_STAGE để kiểm tra thủ công."
+  rmdir -- "$KW_SITE_STAGE" 2>/dev/null ||
+    kw_log WARN "Giữ staging tại $KW_SITE_STAGE để kiểm tra thủ công."
+  printf 'Đã tạo site %s với PHP-FPM %s và chế độ DNS mặc định. Source thuộc %s:www-data; pool/vhost/metadata thuộc root. Cần cấu hình DNS và SSL riêng.\n' "$domain" "$php" "$KW_SITE_OWNER"
 )
 
 kw_site_create() (
@@ -1012,6 +1065,9 @@ kw_site_remove_plan() {
   printf '  Source/code: %s (%s)\n' "$KW_SITE_ROOT" "$(du -shx -- "$KW_SITE_ROOT" | awk '{print $1}')"
   printf '  User Linux: %s\n  PHP-FPM: %s\n  Pool: %s\n' "$KW_SITE_OWNER" "$php" "$KW_SITE_POOL"
   printf '  Nginx: %s\n  Metadata: %s\n' "$KW_SITE_VHOST" "$KW_SITE_META"
+  if [[ -e /etc/kwvps/ingress/$domain.mode || -L /etc/kwvps/ingress/$domain.mode ]]; then
+    printf '  Nhãn DNS/Tunnel: /etc/kwvps/ingress/%s.mode\n' "$domain"
+  fi
   if [[ -f /etc/letsencrypt/renewal/$domain.conf ]]; then
     printf '  SSL/renewal: %s (chứng chỉ sẽ giữ nguyên)\n' "/etc/letsencrypt/renewal/$domain.conf"
   fi
@@ -1038,7 +1094,7 @@ kw_site_remove_plan() {
 }
 
 kw_site_remove_preflight() {
-  local domain=$1 id php renew mode=${2:-keep}
+  local domain=$1 id php renew mode=${2:-keep} ingress_mode
   [[ $mode == keep || $mode == purge ]] || return 2
   ((EUID == 0)) || { kw_log ERROR 'Cần sudo/root để gỡ site.'; return 2; }
   kw_os_supported '' || return 2
@@ -1048,6 +1104,17 @@ kw_site_remove_preflight() {
   id=${KW_SITE_OWNER#kw}
   php=${KW_SITE_POOL#/etc/php/}; php=${php%%/*}
   KW_REMOVE_PHP=$php
+  KW_REMOVE_INGRESS="/etc/kwvps/ingress/$domain.mode"
+  if [[ -e /etc/kwvps/ingress || -L /etc/kwvps/ingress ]]; then
+    [[ -d /etc/kwvps/ingress && ! -L /etc/kwvps/ingress &&
+       $(stat -c %u:%a -- /etc/kwvps/ingress) == 0:700 ]] || return 2
+  fi
+  if [[ -e $KW_REMOVE_INGRESS || -L $KW_REMOVE_INGRESS ]]; then
+    [[ -f $KW_REMOVE_INGRESS && ! -L $KW_REMOVE_INGRESS &&
+       $(stat -c %u:%a -- "$KW_REMOVE_INGRESS") == 0:600 ]] || return 2
+    IFS= read -r ingress_mode < "$KW_REMOVE_INGRESS" || return 2
+    [[ $ingress_mode == dns || $ingress_mode == tunnel ]] || return 2
+  fi
   [[ -f $KW_SITE_POOL && ! -L $KW_SITE_POOL && \
      -f $KW_SITE_VHOST && ! -L $KW_SITE_VHOST && \
      -L $KW_SITE_ENABLED && $(readlink -- "$KW_SITE_ENABLED") == "$KW_SITE_VHOST" ]] || return 2
@@ -1081,7 +1148,7 @@ kw_site_remove_preflight() {
 kw_site_remove_rollback() {
   ((KW_REMOVE_DONE == 0)) || return 0
   local name source target
-  for name in root meta pool vhost enabled renewal; do
+  for name in root meta pool vhost enabled renewal ingress; do
     case "$name" in
       root) source="$KW_REMOVE_DIR/site-root"; target=$KW_SITE_ROOT ;;
       meta) source="$KW_REMOVE_DIR/site.meta"; target=$KW_SITE_META ;;
@@ -1089,6 +1156,7 @@ kw_site_remove_rollback() {
       vhost) source="$KW_REMOVE_DIR/vhost.conf"; target=$KW_SITE_VHOST ;;
       enabled) source="$KW_REMOVE_DIR/enabled.conf"; target=$KW_SITE_ENABLED ;;
       renewal) source="$KW_REMOVE_DIR/renewal.conf"; target=$KW_REMOVE_RENEWAL ;;
+      ingress) source="$KW_REMOVE_DIR/ingress.mode"; target=$KW_REMOVE_INGRESS ;;
     esac
     [[ -n $target ]] || continue
     if [[ -e $source || -L $source ]]; then
@@ -1114,7 +1182,7 @@ kw_site_remove_rollback() {
 
 kw_site_remove_apply_locked() (
   local domain=$1 mode=${2:-keep} id timestamp suffix
-  local KW_REMOVE_DONE=0 KW_REMOVE_DIR='' KW_REMOVE_PHP='' KW_REMOVE_RENEWAL=''
+  local KW_REMOVE_DONE=0 KW_REMOVE_DIR='' KW_REMOVE_PHP='' KW_REMOVE_RENEWAL='' KW_REMOVE_INGRESS=''
   # shellcheck disable=SC2034 # Rollback trap reads these mutation markers.
   local KW_REMOVE_NGINX_CHANGED=0 KW_REMOVE_FPM_CHANGED=0
   kw_site_remove_preflight "$domain" "$mode" || return 2
@@ -1136,6 +1204,9 @@ kw_site_remove_apply_locked() (
   mv -T -- "$KW_SITE_POOL" "$KW_REMOVE_DIR/pool.conf" || return 1
   mv -T -- "$KW_SITE_META" "$KW_REMOVE_DIR/site.meta" || return 1
   mv -T -- "$KW_SITE_ROOT" "$KW_REMOVE_DIR/site-root" || return 1
+  if [[ -f $KW_REMOVE_INGRESS ]]; then
+    mv -T -- "$KW_REMOVE_INGRESS" "$KW_REMOVE_DIR/ingress.mode" || return 1
+  fi
   if [[ -n $KW_REMOVE_RENEWAL ]]; then
     mv -T -- "$KW_REMOVE_RENEWAL" "$KW_REMOVE_DIR/renewal.conf" || return 1
   fi
@@ -1204,7 +1275,7 @@ kw_site_retired_list() {
 }
 
 kw_site_retired_preflight() {
-  local domain=${1,,} name=$2 id dir key value meta_domain='' meta_id='' meta_php='' meta_owner='' path dump
+  local domain=${1,,} name=$2 id dir key value meta_domain='' meta_id='' meta_php='' meta_owner='' path dump ingress_mode
   ((EUID == 0)) || return 2
   kw_os_supported '' || return 2
   [[ -f /etc/kwvps/install-id && ! -L /etc/kwvps/install-id && \
@@ -1239,6 +1310,18 @@ kw_site_retired_preflight() {
      -f $dir/pool.conf && ! -L $dir/pool.conf && \
      -f $dir/vhost.conf && ! -L $dir/vhost.conf && \
      -L $dir/enabled.conf && $(readlink -- "$dir/enabled.conf") == "$KW_SITE_VHOST" ]] || return 2
+  KW_RETIRED_INGRESS="/etc/kwvps/ingress/$domain.mode"
+  if [[ -e $dir/ingress.mode || -L $dir/ingress.mode ]]; then
+    [[ -f $dir/ingress.mode && ! -L $dir/ingress.mode &&
+       $(stat -c %u:%a -- "$dir/ingress.mode") == 0:600 &&
+       ! -e $KW_RETIRED_INGRESS && ! -L $KW_RETIRED_INGRESS ]] || return 2
+    IFS= read -r ingress_mode < "$dir/ingress.mode" || return 2
+    [[ $ingress_mode == dns || $ingress_mode == tunnel ]] || return 2
+    if [[ -e /etc/kwvps/ingress || -L /etc/kwvps/ingress ]]; then
+      [[ -d /etc/kwvps/ingress && ! -L /etc/kwvps/ingress &&
+         $(stat -c %u:%a -- /etc/kwvps/ingress) == 0:700 ]] || return 2
+    fi
+  fi
   cmp -s -- "$dir/pool.conf" <(kw_site_render_pool "$id" "$KW_SITE_OWNER") || return 2
   KW_RETIRED_RENEWAL=''
   if ! kw_site_vhost_matches "$dir/vhost.conf" "$domain" "$id" kw_site_render_vhost "$domain" "$id" &&
@@ -1270,19 +1353,20 @@ kw_site_retired_preflight() {
 }
 
 kw_site_retired_plan() {
-  local domain=$1 name=$2 KW_RETIRED_PHP='' KW_RETIRED_DIR='' KW_RETIRED_RENEWAL=''
+  local domain=$1 name=$2 KW_RETIRED_PHP='' KW_RETIRED_DIR='' KW_RETIRED_RENEWAL='' KW_RETIRED_INGRESS=''
   kw_site_retired_preflight "$domain" "$name" || return 2
   printf 'Kế hoạch phục hồi site đã giữ:\n'
   printf '  Domain: %s\n  Vùng giữ: %s\n  PHP-FPM: %s\n' \
     "${domain,,}" "$KW_RETIRED_DIR" "$KW_RETIRED_PHP"
-  printf '  Trả source, metadata, pool và vhost về đường dẫn cũ; kiểm tra cấu hình rồi khởi động lại dịch vụ.\n'
+  printf '  Trả source, metadata, pool, vhost và nhãn DNS/Tunnel (nếu có) về đường dẫn cũ; kiểm tra cấu hình rồi khởi động lại dịch vụ.\n'
   printf '  Không khôi phục DB, SSL, log hoặc thay đổi bên ngoài KwVPS.\n'
 }
 
 kw_site_retired_rollback() {
   ((KW_RETIRED_DONE == 0)) || return 0
   local name source target
-  for name in renewal enabled vhost pool meta root; do
+  for name in renewal enabled vhost pool meta root ingress; do
+    [[ $name != ingress || $KW_RETIRED_HAS_INGRESS == 1 ]] || continue
     case "$name" in
       renewal) source=$KW_RETIRED_RENEWAL; target="$KW_RETIRED_DIR/renewal.conf" ;;
       enabled) source=$KW_SITE_ENABLED; target="$KW_RETIRED_DIR/enabled.conf" ;;
@@ -1290,6 +1374,7 @@ kw_site_retired_rollback() {
       pool) source=$KW_SITE_POOL; target="$KW_RETIRED_DIR/pool.conf" ;;
       meta) source=$KW_SITE_META; target="$KW_RETIRED_DIR/site.meta" ;;
       root) source=$KW_SITE_ROOT; target="$KW_RETIRED_DIR/site-root" ;;
+      ingress) source=$KW_RETIRED_INGRESS; target="$KW_RETIRED_DIR/ingress.mode" ;;
     esac
     [[ -n $source ]] || continue
     if [[ -e $source || -L $source ]]; then
@@ -1315,13 +1400,20 @@ kw_site_retired_rollback() {
 
 kw_site_retired_apply_locked() (
   local domain=$1 name=$2
-  local KW_RETIRED_PHP='' KW_RETIRED_DIR='' KW_RETIRED_RENEWAL='' KW_RETIRED_DONE=0
+  local KW_RETIRED_PHP='' KW_RETIRED_DIR='' KW_RETIRED_RENEWAL='' KW_RETIRED_INGRESS='' KW_RETIRED_DONE=0 KW_RETIRED_HAS_INGRESS=0
   # shellcheck disable=SC2034 # Rollback trap reads these mutation markers.
   local KW_RETIRED_NGINX_CHANGED=0 KW_RETIRED_FPM_CHANGED=0
   kw_site_retired_preflight "$domain" "$name" || return 2
   trap kw_site_retired_rollback EXIT
   mv -T -- "$KW_RETIRED_DIR/site-root" "$KW_SITE_ROOT" || return 1
   mv -T -- "$KW_RETIRED_DIR/site.meta" "$KW_SITE_META" || return 1
+  if [[ -f $KW_RETIRED_DIR/ingress.mode ]]; then
+    install -d -m 0700 -o root -g root -- /etc/kwvps/ingress || return 1
+    [[ -d /etc/kwvps/ingress && ! -L /etc/kwvps/ingress &&
+       $(stat -c %u:%a -- /etc/kwvps/ingress) == 0:700 ]] || return 2
+    mv -T -- "$KW_RETIRED_DIR/ingress.mode" "$KW_RETIRED_INGRESS" || return 1
+    KW_RETIRED_HAS_INGRESS=1
+  fi
   # shellcheck disable=SC2034 # A move can partially mutate the service configuration.
   KW_RETIRED_FPM_CHANGED=1
   mv -T -- "$KW_RETIRED_DIR/pool.conf" "$KW_SITE_POOL" || return 1
@@ -1412,7 +1504,7 @@ kw_site_purge_preflight() {
   for entry in "$dir"/*; do
     [[ -e $entry || -L $entry ]] || continue
     base=${entry##*/}
-    case "$base" in site.meta|site-root|pool.conf|vhost.conf|enabled.conf|renewal.conf) ;; *) kw_log ERROR "Gói giữ có mục lạ: $base"; return 2 ;; esac
+    case "$base" in site.meta|site-root|pool.conf|vhost.conf|enabled.conf|renewal.conf|ingress.mode) ;; *) kw_log ERROR "Gói giữ có mục lạ: $base"; return 2 ;; esac
   done
   KW_PURGE_DIR=$dir
 }

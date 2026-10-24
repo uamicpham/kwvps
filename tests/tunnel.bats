@@ -138,3 +138,27 @@ setup() {
   [ "$status" -eq 0 ]
   [ "$output" = unknown ]
 }
+
+@test "explicit DNS label stays DNS while cloudflared is active" {
+  kw_tunnel_site_mode_path() {
+    kw_domain_valid "$1" || return 2
+    printf '%s/%s.mode\n' "$BATS_TEST_TMPDIR" "$1"
+  }
+  systemctl() { [[ $1 == is-active && $2 == --quiet && $3 == cloudflared.service ]]; }
+  stat() { [[ $1 == -c && $2 == %u:%a ]] && printf '0:600\n'; }
+  printf 'dns\n' > "$BATS_TEST_TMPDIR/example.com.mode"
+  run kw_tunnel_site_mode example.com
+  [ "$status" -eq 0 ]
+  [ "$output" = dns ]
+}
+
+@test "configured Tunnel offers an explicit per-site switch" {
+  kw_site_prompt_domain() { KW_SITE_CHOICE=example.com; }
+  kw_tunnel_site_mode() { printf 'dns\n'; }
+  kw_prompt_yes_no_token() { printf 'PROMPT:%s\n' "$1"; KW_PROMPT_VALUE=$2; }
+  kw_tunnel_site_mode_set() { printf 'SET:%s:%s:%s\n' "$1" "$2" "$3"; }
+  run kw_tunnel_post_config_interactive
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'PROMPT:Bật chế độ Tunnel và Real IP cho example.com?'* ]]
+  [[ "$output" == *'SET:example.com:tunnel:INGRESS:example.com:tunnel'* ]]
+}
