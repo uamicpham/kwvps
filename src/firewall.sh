@@ -27,12 +27,22 @@ kw_fw_ready() {
 }
 
 kw_fw_ssh_ports() {
-  local config port client_port local_port extra
+  local config port client_port local_port extra socket_listen
+  local -a socket_ports=()
   kw_has sshd || { kw_log ERROR 'Không đọc được sshd để bảo vệ cổng SSH.'; return 2; }
   config=$(sshd -T 2>/dev/null) || { kw_log ERROR 'sshd -T không hợp lệ; không bật UFW.'; return 2; }
-  if systemctl is-active --quiet ssh.socket && [[ -z ${SSH_CONNECTION:-} ]]; then
-    kw_log ERROR 'ssh.socket đang chạy nhưng không biết cổng của phiên SSH hiện tại; từ chối bật UFW để tránh khóa máy.'
-    return 2
+  if systemctl is-active --quiet ssh.socket; then
+    socket_listen=$(systemctl show ssh.socket -p Listen --value 2>/dev/null)
+    while read -r port; do
+      if kw_port_valid "$port"; then
+        socket_ports+=("$port")
+        printf '%s\n' "$port"
+      fi
+    done < <(grep -oE ':[0-9]+' <<< "$socket_listen" | tr -d ':')
+    if [[ -z ${SSH_CONNECTION:-} && ${#socket_ports[@]} -eq 0 ]]; then
+      kw_log ERROR 'ssh.socket đang chạy nhưng không biết cổng của phiên SSH hiện tại; từ chối bật UFW để tránh khóa máy.'
+      return 2
+    fi
   fi
   while read -r _ port; do
     kw_port_valid "$port" || { kw_log ERROR 'Cổng SSH không hợp lệ; không bật UFW.'; return 2; }

@@ -499,9 +499,14 @@ kw_tunnel_inbound_change() (
 )
 
 kw_tunnel_inbound_interactive() {
-  local choice
+  local choice ufw_state
+  ufw_state=$(LC_ALL=C ufw status 2>/dev/null || true)
   printf 'Inbound 80/443 chỉ là firewall UFW, không tắt Nginx local.\n'
-  printf 'Nếu UFW đang tắt, KwVPS sẽ bảo vệ SSH rồi tự bật UFW; các dịch vụ inbound khác có thể bị chặn.\n'
+  if [[ $ufw_state == 'Status: inactive'* ]]; then
+    printf 'Lưu ý: UFW hiện đang TẮT. KwVPS sẽ tự động thêm rule ALLOW cho cổng SSH và kích hoạt UFW.\n'
+  else
+    printf 'Nếu UFW đang tắt, KwVPS sẽ bảo vệ SSH rồi tự bật UFW; các dịch vụ inbound khác có thể bị chặn.\n'
+  fi
   printf 'Lần bật UFW để mở 80/443 có thể gián đoạn inbound ngắn trước khi ALLOW được thêm.\n'
   printf 'Đóng cổng 80 có thể ảnh hưởng HTTP-01; KwVPS sẽ thử gia hạn ACME và hoàn tác nếu lỗi.\n'
   printf 'Firewall nhà cung cấp VPS nằm ngoài KwVPS.\n1. Đóng inbound 80/443\n2. Mở inbound 80/443\n0. Quay lại\nChọn: '

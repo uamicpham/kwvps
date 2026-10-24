@@ -437,6 +437,18 @@ output=$(
   kw_fw_ssh_ports
 )
 assert test "$output" = $'22\n2222\n2200'
+output=$(
+  kw_has() { return 0; }
+  sshd() { printf 'port 22\n'; }
+  systemctl() {
+    if [[ $* == 'is-active --quiet ssh.socket' ]]; then return 0;
+    elif [[ $* == 'show ssh.socket -p Listen --value' ]]; then printf '[::]:22 (Stream)\n';
+    else return 1; fi;
+  }
+  unset SSH_CONNECTION
+  kw_fw_ssh_ports
+)
+assert test "$output" = $'22\n22'
 assert kw_swap_size_valid 256
 reject kw_swap_size_valid 127
 reject kw_swap_size_valid 8193

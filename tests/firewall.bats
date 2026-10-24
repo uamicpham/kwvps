@@ -75,3 +75,17 @@ setup() {
   [ "$status" -eq 2 ]
   [[ "$output" == *'từ chối bật UFW'* ]]
 }
+
+@test "SSH guard collects socket ports when active without SSH_CONNECTION" {
+  kw_has() { return 0; }
+  sshd() { printf 'port 22\n'; }
+  systemctl() {
+    if [[ $* == 'is-active --quiet ssh.socket' ]]; then return 0;
+    elif [[ $* == 'show ssh.socket -p Listen --value' ]]; then printf '[::]:22 (Stream)\n';
+    else return 1; fi;
+  }
+  unset SSH_CONNECTION
+  run kw_fw_ssh_ports
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'22'* ]]
+}
