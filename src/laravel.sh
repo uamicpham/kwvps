@@ -20,6 +20,21 @@ kw_laravel_frontend_valid() {
   case "${1:-}" in auto|none|npm|pnpm|yarn) return 0 ;; *) return 1 ;; esac
 }
 
+kw_laravel_migrate_valid() { [[ ${1:-} == 0 || ${1:-} == 1 ]]; }
+
+kw_laravel_migrate_prompt() {
+  local answer
+  while :; do
+    printf 'Chạy migration cho database của site? [y/N]: '
+    IFS= read -r answer || return 1
+    case "$answer" in
+      y|Y|yes|YES) KW_LARAVEL_MIGRATE=1; return 0 ;;
+      ''|n|N|no|NO|0) KW_LARAVEL_MIGRATE=0; return 0 ;;
+      *) printf 'Chỉ nhập y hoặc N.\n' ;;
+    esac
+  done
+}
+
 kw_laravel_layout_ready() {
   local domain=$1 path mode
   kw_site_lookup "$domain" || return 2
@@ -748,11 +763,12 @@ kw_laravel_clone_locked() (
 )
 
 kw_laravel_pull_locked() (
-  local domain=$1 branch=$2 source current origin status
+  local domain=$1 branch=${2:-} source current origin status
   kw_laravel_layout_ready "$domain" && kw_laravel_git_source || return 2
-  kw_laravel_branch_valid "$branch" || return 2
   source=$KW_SITE_ROOT/source
   current=$(runuser -u "$KW_SITE_OWNER" -- git -C "$source" symbolic-ref --quiet --short HEAD) || return 2
+  [[ -n $branch ]] || branch=$current
+  kw_laravel_branch_valid "$branch" || return 2
   [[ $current == "$branch" ]] || {
     kw_log ERROR "Checkout đang ở nhánh $current; không tự chuyển nhánh."; return 2;
   }
@@ -948,15 +964,24 @@ kw_laravel_health() {
   fi
 }
 
+kw_laravel_run_migrations() {
+  local owner=$1 php=$2 release=$3
+  printf 'Đang chạy migration bằng PHP %s trong release mới (trước khi đổi current)...\n' "$php"
+  if ! runuser -u "$owner" -- "php$php" "$release/artisan" migrate --force --no-interaction; then
+    kw_log ERROR 'Migration thất bại; chưa đổi current. Database có thể đã thay đổi một phần, cần kiểm tra trước khi thử lại.'
+    return 1
+  fi
+}
+
 kw_laravel_deploy_locked() (
-  local domain=$1 frontend=${2:-auto} id source deploy releases shared owner php commit short stamp stage='' release='' archive='' changes command lock_count=0 \
-    current next='' previous='' kind first vhost_backup='' vhost_temp='' activated=0 success=0
+  local domain=$1 frontend=${2:-auto} migrate=${3:-0} id source deploy releases shared owner php commit short stamp stage='' release='' archive='' changes command lock_count=0 \
+    current next='' previous='' kind first vhost_backup='' vhost_temp='' activated=0 success=0 migration_attempted=0
   # All paths below are absolute. Site-user commands must not inherit /root.
   cd -- / || return 1
-  kw_laravel_frontend_valid "$frontend" || return 2
+  kw_laravel_frontend_valid "$frontend" && kw_laravel_migrate_valid "$migrate" || return 2
   kw_laravel_layout_ready "$domain" && kw_laravel_git_source || return 2
   kw_nginx_ready || return 2
-  for command in git tar composer curl "php$KW_SITE_PHP"; do
+  for command in git tar composer curl runuser "php$KW_SITE_PHP"; do
     kw_has "$command" || { kw_log ERROR "Thiếu $command; chưa đổi website. Cài công cụ này trước."; return 2; }
   done
   id=${KW_SITE_OWNER#kw}; source=$KW_SITE_ROOT/source; deploy=$KW_SITE_ROOT/deploy
@@ -977,6 +1002,8 @@ kw_laravel_deploy_locked() (
     previous=$(readlink -- "$current") || return 2
     [[ $previous == releases/* && $previous != *..* && -d $deploy/$previous ]] || return 2
   fi
+  # The menu's Deploy action is self-contained: update source first, then build that commit.
+  kw_laravel_pull_locked "$domain" || return $?
   [[ ! -e $source/.gitmodules && ! -L $source/.gitmodules ]] || {
     kw_log ERROR 'Repository dùng Git submodule; chưa hỗ trợ triển khai tự động.'; return 2;
   }
@@ -1081,7 +1108,11 @@ kw_laravel_deploy_locked() (
       kw_cf_realip_render_for_site "$domain" "$id" > "$vhost_temp" || return 1
     chmod 0644 -- "$vhost_temp" || return 1
   fi
-  trap 'if ((activated && ! success)); then if [[ -n $previous ]]; then ln -sfn -- "$previous" "$next" && mv -Tf -- "$next" "$current" || kw_log ERROR "Không thể quay lại release cũ: $current"; else rm -f -- "$current" || kw_log ERROR "Không thể bỏ current: $current"; fi; if [[ -n $vhost_backup ]]; then install -m 0644 -o root -g root -- "$vhost_backup" "$KW_SITE_VHOST" || kw_log ERROR "Cần phục hồi vhost từ $vhost_backup"; fi; kw_nginx_test_restart || kw_log ERROR "Cần kiểm tra Nginx sau rollback: $domain"; fi; [[ -z $vhost_temp ]] || rm -f -- "$vhost_temp"; [[ -z $next ]] || rm -f -- "$next"' EXIT
+  trap 'if ((!success && migration_attempted)); then kw_log WARN "Migration có thể đã thay đổi database; rollback release không hoàn tác dữ liệu."; fi; if ((activated && ! success)); then if [[ -n $previous ]]; then ln -sfn -- "$previous" "$next" && mv -Tf -- "$next" "$current" || kw_log ERROR "Không thể quay lại release cũ: $current"; else rm -f -- "$current" || kw_log ERROR "Không thể bỏ current: $current"; fi; if [[ -n $vhost_backup ]]; then install -m 0644 -o root -g root -- "$vhost_backup" "$KW_SITE_VHOST" || kw_log ERROR "Cần phục hồi vhost từ $vhost_backup"; fi; kw_nginx_test_restart || kw_log ERROR "Cần kiểm tra Nginx sau rollback: $domain"; fi; [[ -z $vhost_temp ]] || rm -f -- "$vhost_temp"; [[ -z $next ]] || rm -f -- "$next"' EXIT
+  if ((migrate)); then
+    migration_attempted=1
+    kw_laravel_run_migrations "$owner" "$php" "$release" || return 1
+  fi
   runuser -u "$owner" -- mv -Tf -- "$next" "$current" || return 1
   # shellcheck disable=SC2034 # Read by the EXIT rollback trap.
   activated=1
@@ -1117,8 +1148,30 @@ kw_laravel_with_lock() (
   esac
 )
 
+kw_laravel_deploy_confirm() {
+  local domain=$1 frontend=$2 migrate=$3 frontend_note
+  kw_domain_valid "$domain" && kw_laravel_frontend_valid "$frontend" &&
+    kw_laravel_migrate_valid "$migrate" || return 2
+  case "$frontend" in
+    auto) frontend_note='tự nhận công cụ build frontend từ lockfile' ;;
+    none) frontend_note='bỏ qua build frontend' ;;
+    *) frontend_note="build frontend bằng $frontend" ;;
+  esac
+  printf 'Deploy %s: pull nhánh hiện tại, chạy Composer, %s, tạo release, kiểm tra Nginx/HTTP.\n' "$domain" "$frontend_note"
+  if ((migrate)); then
+    printf 'Có chạy php artisan migrate --force trên release mới trước khi đổi current.\n'
+    printf 'CẢNH BÁO: migration có thể không đảo ngược; rollback code không phục hồi database. Hãy backup DB trước.\n'
+    printf 'Migration cần tương thích với release đang chạy vì website vẫn phục vụ trong lúc migrate.\n'
+  else
+    printf 'Không chạy migration. Nếu bản mới cần thay đổi schema, hãy chọn --migrate hoặc trả lời y ở menu.\n'
+  fi
+  printf 'Composer/build chạy script của repository dưới user site; chỉ dùng Git repo đáng tin cậy.\n'
+  kw_prompt_yes_no_token "Triển khai $domain?" "$domain" || return 0
+  kw_laravel_with_lock deploy "$domain" "$frontend" "$migrate"
+}
+
 kw_laravel_interactive() {
-  local action=$1 domain url branch frontend choice
+  local action=$1 domain url branch frontend choice migrate
   kw_site_prompt_domain || return 0
   domain=$KW_SITE_CHOICE
   if [[ $action != status ]]; then kw_laravel_layout_ready "$domain" || return 2; fi
@@ -1182,11 +1235,9 @@ kw_laravel_interactive() {
           *) printf 'Chọn số 0–3.\n' ;;
         esac
       done
-      printf 'Deploy %s: chạy Composer và %s (nếu chọn), kích hoạt release mới, kiểm tra Nginx/HTTP.\n' "$domain" "$frontend"
-      printf 'Không tự chạy migration/seed, không đổi DB, không gọi deploy.sh của ứng dụng.\n'
-      printf 'Composer/công cụ frontend có thể chạy script của repository dưới user site. Hãy chỉ dùng Git repo bạn tin cậy.\n'
-      kw_prompt_yes_no_token "Triển khai $domain?" "$domain" || return 0
-      kw_laravel_with_lock deploy "$domain" "$frontend" ;;
+      kw_laravel_migrate_prompt || return 0
+      migrate=$KW_LARAVEL_MIGRATE
+      kw_laravel_deploy_confirm "$domain" "$frontend" "$migrate" ;;
     *) return 2 ;;
   esac
 }

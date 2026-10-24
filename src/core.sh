@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Shared primitives. No writes, network access, eval, or automatic sudo.
-readonly KW_VERSION='0.50.13'
+readonly KW_VERSION='0.50.14-dev'
 KW_PREVIEW=0
 
 kw_log() {
@@ -20,6 +20,7 @@ kw_help() {
     'bash kwvps --swap              Swap hiện tại' \
     'bash kwvps --site-plan DOMAIN PHP   Xem kế hoạch thêm site' \
     'bash kwvps --site-list         Site do KwVPS quản lý (Linux)' \
+    'sudo kwvps --laravel-deploy DOMAIN [--migrate]   Pull Git và deploy Laravel; migration mặc định tắt' \
     'bash kwvps --version           Phiên bản KwVPS' \
     'bash kwvps --help              Trợ giúp' \
     '0: quay lại (menu gốc: thoát). Ctrl+C: thoát. EOF: thoát.' \
@@ -125,6 +126,25 @@ kw_main() {
   if [[ ${1:-} == --site-plan ]]; then
     if (($# != 3)); then kw_help >&2; return 2; fi
     kw_site_plan "$2" "$3"
+    return
+  fi
+  if [[ ${1:-} == --laravel-deploy ]]; then
+    if { (($# != 2 && $# != 3)); } || { (($# == 3)) && [[ $3 != --migrate ]]; }; then
+      kw_help >&2; return 2
+    fi
+    if [[ $(uname -s) != Linux ]]; then
+      kw_log ERROR 'Deploy Laravel cần Ubuntu VPS; không chạy trên máy phát triển.'
+      return 2
+    fi
+    if ! kw_os_supported; then
+      kw_log ERROR 'Deploy Laravel chỉ hỗ trợ Ubuntu 24.04.'
+      return 2
+    fi
+    if ((EUID != 0)); then
+      kw_log ERROR 'Cần quyền quản trị để deploy Laravel. Hãy chạy: sudo kwvps --laravel-deploy DOMAIN [--migrate]'
+      return 2
+    fi
+    kw_laravel_deploy_confirm "$2" auto "$(( $# == 3 ))"
     return
   fi
   if (($# > 1)); then kw_help >&2; return 2; fi

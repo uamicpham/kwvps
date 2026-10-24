@@ -127,6 +127,45 @@ setup() {
   [ "$status" -eq 0 ]
   run kw_laravel_frontend_valid 'pnpm;id'
   [ "$status" -ne 0 ]
+  kw_laravel_migrate_valid 0
+  kw_laravel_migrate_valid 1
+  ! kw_laravel_migrate_valid '1;id'
+}
+
+@test "Laravel migration is opt-in and rejects unexpected answers" {
+  kw_laravel_migrate_prompt <<< ''
+  [ "$KW_LARAVEL_MIGRATE" = 0 ]
+  kw_laravel_migrate_prompt <<< 'y'
+  [ "$KW_LARAVEL_MIGRATE" = 1 ]
+  run kw_laravel_migrate_prompt <<< $'wrong\nn'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'Chỉ nhập y hoặc N.'* ]]
+}
+
+@test "Laravel deploy confirmation passes explicit migrate choice" {
+  kw_prompt_yes_no_token() { return 0; }
+  kw_laravel_with_lock() { printf 'ACTION:%s\n' "$*"; }
+  run kw_laravel_deploy_confirm example.com auto 1
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'ACTION:deploy example.com auto 1'* ]]
+  [[ "$output" == *'rollback code không phục hồi database'* ]]
+  run kw_laravel_deploy_confirm example.com auto 0
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'ACTION:deploy example.com auto 0'* ]]
+  run kw_laravel_deploy_confirm example.com auto '--migrate;id'
+  [ "$status" -eq 2 ]
+  [[ "$output" != *'ACTION:'* ]]
+}
+
+@test "Laravel migration runs with the site PHP/user and reports failure" {
+  runuser() { printf 'RUN:%s\n' "$*"; }
+  run kw_laravel_run_migrations kwexamplecom 8.3 /site/deploy/releases/new
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'RUN:-u kwexamplecom -- php8.3 /site/deploy/releases/new/artisan migrate --force --no-interaction'* ]]
+  runuser() { return 1; }
+  run kw_laravel_run_migrations kwexamplecom 8.3 /site/deploy/releases/new
+  [ "$status" -eq 1 ]
+  [[ "$output" == *'Database có thể đã thay đổi một phần'* ]]
 }
 
 @test "Laravel vhost keeps HTTP-01 on original public while serving current release" {

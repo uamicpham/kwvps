@@ -264,6 +264,7 @@ assert test "${output#*'3. PHP 8.3'}" != "$output"
 assert test "${output#*'4. PHP 7.4'}" != "$output"
 assert test "${output#*'SELECTED=8.3'}" != "$output"
 assert bash kwvps --preview </dev/null >/dev/null
+reject bash kwvps --laravel-deploy example.com --unknown
 assert bash install.sh --help >/dev/null
 for page in main sites ssl ssh db php nginx fail2ban utilities cron cache swap firewall disk logs update service-update backup tunnel advanced cloudflare; do
   output=$(kw_catalog "$page")
@@ -481,4 +482,28 @@ output=$(
   kw_cf_zone_discover blog.example.com cfut_123456789012345678901234567890
 )
 assert test "$output" = 0123456789abcdef0123456789abcdef
+assert kw_laravel_migrate_valid 0
+assert kw_laravel_migrate_valid 1
+reject kw_laravel_migrate_valid '1;id'
+output=$(kw_laravel_migrate_prompt <<< y; printf 'MIGRATE=%s\n' "$KW_LARAVEL_MIGRATE")
+assert test "${output##*MIGRATE=}" = 1
+output=$(kw_laravel_migrate_prompt <<< n; printf 'MIGRATE=%s\n' "$KW_LARAVEL_MIGRATE")
+assert test "${output##*MIGRATE=}" = 0
+output=$(
+  kw_prompt_yes_no_token() { return 0; }
+  kw_laravel_with_lock() { printf 'ACTION:%s\n' "$*"; }
+  kw_laravel_deploy_confirm example.com auto 1
+)
+assert test "${output#*'ACTION:deploy example.com auto 1'}" != "$output"
+assert test "${output#*'rollback code không phục hồi database'}" != "$output"
+output=$(
+  runuser() { printf 'RUN:%s\n' "$*"; }
+  kw_laravel_run_migrations kwexamplecom 8.3 /site/deploy/releases/new
+)
+assert test "${output#*'RUN:-u kwexamplecom -- php8.3 /site/deploy/releases/new/artisan migrate --force --no-interaction'}" != "$output"
+kw_laravel_migrate_failure_fixture() (
+  runuser() { return 1; }
+  kw_laravel_run_migrations kwexamplecom 8.3 /site/deploy/releases/new >/dev/null 2>&1
+)
+reject kw_laravel_migrate_failure_fixture
 printf 'PASS: %d checks\n' "$tests"

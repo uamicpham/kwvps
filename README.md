@@ -14,7 +14,7 @@ Deploy yêu cầu Git, PHP CLI đúng phiên bản site và Composer; frontend c
 
 ## Trạng thái
 
-Mã nguồn phiên bản `0.50.13`; kiểm tra [GitHub Releases](https://github.com/uamicpham/kwvps/releases) để biết bản đã công bố. API token Cloudflare dùng riêng theo site; backup cấu hình domain có thể kèm token mã hóa bằng mật khẩu. Xem [ghi chú 0.50.13](docs/RELEASE-NOTES-0.50.13.md) và [bảng trạng thái](docs/TRANG-THAI-CHUC-NANG.md).
+Nhánh `main` hiện là mã thử nghiệm `0.50.14-dev`; kiểm tra [GitHub Releases](https://github.com/uamicpham/kwvps/releases) để biết bản ổn định đã công bố. API token Cloudflare dùng riêng theo site; backup cấu hình domain có thể kèm token mã hóa bằng mật khẩu. Xem [ghi chú 0.50.13](docs/RELEASE-NOTES-0.50.13.md) và [bảng trạng thái](docs/TRANG-THAI-CHUC-NANG.md).
 
 Quản lý Sites có tạo, đổi tên miền HTTP nguyên bản, clone source/code, xóa với hai lựa chọn giữ vùng phục hồi/xóa sạch và phân lại quyền. Menu Backup có phục hồi hoặc xóa sạch gói site đã giữ. Tunnel/route thật đã được thử trên VPS lab; đổi tên site không tự cập nhật DNS/route Cloudflare hoặc URL ứng dụng. Các thao tác không xóa dùng xác nhận `y/N`; xóa yêu cầu gõ lại đối tượng. **Không cài đè lên VPS LarVPS, web stack có sẵn hoặc máy chứa website/dữ liệu.**
 
@@ -54,6 +54,8 @@ bash kwvps --status
 bash kwvps --services
 bash kwvps
 ```
+
+Với site Laravel đã clone Git và cấu hình `.env`, menu **Quản lý Sites → Laravel theo site → Deploy release Laravel** tự pull rồi build/deploy. Có thể chạy `sudo kwvps --laravel-deploy example.com` hoặc thêm `--migrate` để cho phép chạy migration trước khi chuyển release; cả hai đều hỏi xác nhận. Backup database và kiểm tra migration tương thích với bản đang chạy trước khi chọn `--migrate`. Các bước đặc thù của ứng dụng (Filament/Livewire, queue, cache, health check riêng) chưa được KwVPS tự xử lý.
 
 Trên VPS thử nghiệm mới, chạy `bash install.sh --check` trước. Khi điều kiện đạt, `sudo bash install.sh --apply` cài Nginx, PHP 8.3 FPM, MariaDB, Fail2ban, UFW, cron, nano, zip/unzip và lệnh `kwvps`; bộ cài không tự bật UFW. Xem [hướng dẫn thử nghiệm](docs/THU-NGHIEM-VPS.md) trước khi áp dụng. Không cần sudo để xem menu; thao tác ghi cần sudo và xác nhận. Truy vấn UFW/Fail2ban/journal có thể cần quyền riêng.
 
