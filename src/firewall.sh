@@ -220,7 +220,20 @@ kw_fw_port_plan() {
 }
 
 kw_fw_port_rollback() {
+  local number
+  local -a numbers
   ((committed == 0)) || return 0
+  if ((rollback_new_deny)); then
+    mapfile -t numbers < <(kw_fw_rule_numbers port-deny "$port" "$proto" | sort -nr)
+    for number in "${numbers[@]}"; do
+      ufw --force delete "$number" ||
+        kw_log ERROR "Không hoàn tác được DENY $port/$proto; kiểm tra UFW thủ công."
+    done
+  fi
+  if ((rollback_allow)); then
+    ufw allow "${port}/${proto}" comment "kwvps-port-${port}-${proto}" ||
+      kw_log ERROR "Không phục hồi được ALLOW $port/$proto; kiểm tra UFW thủ công."
+  fi
   if ((rollback_deny)); then
     ufw insert 1 deny "${port}/${proto}" comment "kwvps-port-deny-${port}-${proto}" 2>/dev/null ||
       ufw deny "${port}/${proto}" comment "kwvps-port-deny-${port}-${proto}" ||
@@ -231,8 +244,46 @@ kw_fw_port_rollback() {
   fi
 }
 
+kw_fw_port_close_rules() {
+  local port=$1 proto=$2 status line number
+  local -a numbers
+  status=$(LC_ALL=C ufw status numbered) || return 2
+  while IFS= read -r line; do
+    if [[ $line =~ ^\[[[:space:]]*[0-9]+\][[:space:]]+${port}/${proto}[[:space:]] &&
+          $line == *'ALLOW IN'* && $line != *"# kwvps-port-${port}-${proto}" ]]; then
+      kw_log ERROR "Còn ALLOW $port/$proto ngoài KwVPS; không tự xóa rule này."
+      return 2
+    fi
+  done <<< "$status"
+  mapfile -t numbers < <(kw_fw_rule_numbers port "$port" "$proto" | sort -nr)
+  if ((${#numbers[@]} > 0)); then
+    rollback_allow=1
+    for number in "${numbers[@]}"; do ufw --force delete "$number" || return 1; done
+  fi
+  mapfile -t numbers < <(kw_fw_rule_numbers port-deny "$port" "$proto")
+  if ((${#numbers[@]} == 0)); then
+    # UFW may add one address family before returning an error.
+    rollback_new_deny=1
+    if ! ufw insert 1 deny "${port}/${proto}" comment "kwvps-port-deny-${port}-${proto}"; then
+      kw_log WARN "Không chèn được DENY $port/$proto ở đầu; thử thêm rule thường."
+      ufw deny "${port}/${proto}" comment "kwvps-port-deny-${port}-${proto}" || {
+        kw_log ERROR "UFW từ chối tạo DENY $port/$proto; xem lỗi phía trên."
+        return 1
+      }
+    fi
+  fi
+  if ! kw_fw_port_has_action_family "$port" "$proto" DENY 4 ||
+     ! kw_fw_port_has_action_family "$port" "$proto" DENY 6 ||
+       kw_fw_port_has_action_family "$port" "$proto" ALLOW 4 ||
+       kw_fw_port_has_action_family "$port" "$proto" ALLOW 6; then
+    kw_log ERROR "Không xác minh được DENY $port/$proto cho cả IPv4 và IPv6; trạng thái UFW:"
+    LC_ALL=C ufw status numbered >&2 || true
+    return 1
+  fi
+}
+
 kw_fw_port_change() (
-  local verb=$1 port=$2 proto=$3 confirm=$4 status line ssh_ports ssh_port rollback_deny=0 was_inactive=0 committed=0
+  local verb=$1 port=$2 proto=$3 confirm=$4 status line ssh_ports ssh_port rollback_deny=0 rollback_allow=0 rollback_new_deny=0 was_inactive=0 committed=0
   local -a numbers
   kw_fw_port_plan "$verb" "$port" "$proto" || return 2
   [[ $confirm == "${verb}/${port}/${proto}" ]] || { kw_log ERROR 'Xác nhận không khớp.'; return 2; }
@@ -277,20 +328,9 @@ kw_fw_port_change() (
     printf 'Đã yêu cầu ALLOW inbound %s/%s; kiểm tra rule khác và firewall nhà cung cấp nếu chưa truy cập được.\n' "$port" "$proto"
     return
   fi
-  mapfile -t numbers < <(kw_fw_rule_numbers port-deny "$port" "$proto")
-  if ((${#numbers[@]} > 0)); then
-    committed=1
-    printf 'Cổng %s/%s đã có rule chặn KwVPS.\n' "$port" "$proto"
-    return 0
-  fi
-  ufw insert 1 deny "${port}/${proto}" comment "kwvps-port-deny-${port}-${proto}" 2>/dev/null ||
-    ufw deny "${port}/${proto}" comment "kwvps-port-deny-${port}-${proto}" || return 1
-  mapfile -t numbers < <(kw_fw_rule_numbers port-deny "$port" "$proto")
-  ((${#numbers[@]} > 0)) || kw_fw_port_has_action "$port" "$proto" DENY || {
-    kw_log ERROR 'Không xác minh được rule DENY vừa áp.'; return 1;
-  }
+  kw_fw_port_close_rules "$port" "$proto" || return $?
   committed=1
-  printf 'Đã đặt DENY inbound cho %s/%s; rule ALLOW có sẵn được giữ nguyên.\n' "$port" "$proto"
+  printf 'Đã đặt DENY inbound cho %s/%s trên IPv4/IPv6.\n' "$port" "$proto"
 )
 
 kw_fw_ip_plan() {

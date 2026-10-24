@@ -70,6 +70,38 @@ setup() {
   ! kw_fw_port_has_action_family 80 tcp ALLOW 4
 }
 
+@test "closing a port removes KwVPS ALLOW before adding DENY" {
+  local allow=1 deny=0 deletes=0 history=''
+  rollback_allow=0 rollback_new_deny=0
+  kw_fw_rule_numbers() {
+    if [[ $1 == port && $allow == 1 ]]; then printf '1\n2\n'; fi
+  }
+  kw_fw_port_has_action_family() {
+    if [[ $3 == DENY ]]; then [[ $deny == 1 && $allow == 0 ]]
+    else [[ $allow == 1 ]]; fi
+  }
+  ufw() {
+    if [[ $1 == status ]]; then
+      printf 'Status: active\n'
+      if [[ $allow == 1 ]]; then
+        printf '[ 1] 8080/tcp ALLOW IN Anywhere # kwvps-port-8080-tcp\n'
+      fi
+    elif [[ $1 == --force && $2 == delete ]]; then
+      history+="delete:$3 "
+      deletes=$((deletes + 1))
+      if ((deletes == 2)); then allow=0; fi
+    elif [[ $1 == insert ]]; then
+      history+='deny '
+      [[ $allow == 0 ]] || return 1
+      deny=1
+    else return 2; fi
+  }
+  kw_fw_port_close_rules 8080 tcp
+  [ "$allow" -eq 0 ] && [ "$deny" -eq 1 ]
+  [ "$rollback_allow" -eq 1 ] && [ "$rollback_new_deny" -eq 1 ]
+  [[ $history == delete:*deny* ]]
+}
+
 @test "SSH guard collects configured and current SSH ports" {
   kw_has() { return 0; }
   sshd() { printf 'port 22\nport 2222\n'; }
