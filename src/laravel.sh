@@ -383,9 +383,11 @@ kw_laravel_nodesource_repo_add() {
 }
 
 kw_laravel_nodesource_isolated_candidate() {
-  local listings candidate
-  candidate=$(LC_ALL=C apt-cache "${KW_LARAVEL_NODE_APT_OPTS[@]}" policy nodejs |
-    awk '$1 == "Candidate:" { print $2; exit }') || return 2
+  local listings candidate policy
+  # Consume all of apt-cache before selecting Candidate. With pipefail, an
+  # early awk exit can SIGPIPE apt-cache when NodeSource lists many versions.
+  policy=$(LC_ALL=C apt-cache "${KW_LARAVEL_NODE_APT_OPTS[@]}" policy nodejs) || return 2
+  candidate=$(awk '$1 == "Candidate:" && !found { print $2; found=1 }' <<< "$policy") || return 2
   [[ $candidate =~ ^24\.[0-9]+\.[0-9]+-[0-9A-Za-z.+~_-]+$ && $candidate != *..* ]] || return 2
   listings=$(LC_ALL=C apt-cache "${KW_LARAVEL_NODE_APT_OPTS[@]}" madison nodejs) || return 2
   awk -F '|' -v wanted="$candidate" '

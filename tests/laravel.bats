@@ -89,6 +89,28 @@ setup() {
   ! kw_laravel_nodesource_candidate
 }
 
+@test "isolated NodeSource candidate reads a long APT policy under pipefail" {
+  set -o pipefail
+  KW_LARAVEL_NODE_APT_OPTS=()
+  apt-cache() {
+    case "$1" in
+      policy)
+        awk 'BEGIN {
+          print "nodejs:";
+          print "  Candidate: 24.22.1-1nodesource1";
+          for (i=0; i<12000; i++) print "  24.22.1-1nodesource1 500"
+        }'
+        ;;
+      madison)
+        printf 'nodejs | 24.22.1-1nodesource1 | https://deb.nodesource.com/node_24.x nodistro/main amd64 Packages\n'
+        ;;
+      *) return 99 ;;
+    esac
+  }
+  kw_laravel_nodesource_isolated_candidate
+  [ "$KW_LARAVEL_NODE_CANDIDATE" = 24.22.1-1nodesource1 ]
+}
+
 @test "Laravel pnpm/Yarn installation waits for suitable Node" {
   kw_laravel_node_ready() { return 1; }
   npm() { printf 'UNEXPECTED_NPM\n'; return 99; }
