@@ -89,8 +89,10 @@ kw_tunnel_collect_connectors() {
     while IFS='=' read -r key value; do
       case "$key" in domain) domain=$value ;; site_id) id=$value ;; esac
     done < "$file"
-    kw_domain_valid "$domain" && kw_site_id_valid "$id" &&
-      [[ $file == "/etc/kwvps/sites/$id.site" ]] || continue
+    if ! kw_domain_valid "$domain" || ! kw_site_id_valid "$id" ||
+       [[ $file != "/etc/kwvps/sites/$id.site" ]]; then
+      continue
+    fi
     kw_tunnel_site_paths "$domain" || return 2
     [[ $KW_TUNNEL_SITE_ID == "$id" ]] || return 2
     if kw_tunnel_site_connector_present "$domain"; then
@@ -652,7 +654,7 @@ kw_tunnel_guide() {
     'Mỗi site cấu hình riêng sẽ có token root-only và service cloudflared riêng.' \
     'Connector chung cloudflared.service cũ vẫn được giữ để site hiện tại không bị ngắt.' \
     'Tunnel token khác API token Cloudflare theo site ở menu Bảo mật/Cloudflare.'
-  if [[ ${1:-} != --no-site-prompt ]] && kw_site_prompt_domain; then
+  if kw_site_prompt_domain; then
     if kw_site_lookup "$KW_SITE_CHOICE" && [[ -f $KW_SITE_VHOST ]] &&
        grep -Eq 'ssl_certificate[[:space:]]' "$KW_SITE_VHOST"; then
       printf 'Site %s: HTTPS origin, chọn https://127.0.0.1:443 và Origin Server Name = %s.\n' \
