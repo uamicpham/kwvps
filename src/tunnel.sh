@@ -411,6 +411,10 @@ kw_tunnel_inbound_rollback() {
       ufw --force delete "$number" || kw_log ERROR "Không hoàn tác được DENY $port/tcp; kiểm tra UFW thủ công."
     done
   done
+  for port in "${removed_allow_ports[@]}"; do
+    ufw allow "$port/tcp" comment "kwvps-port-$port-tcp" ||
+      kw_log ERROR "Không phục hồi được ALLOW $port/tcp; kiểm tra UFW thủ công."
+  done
   if ((was_inactive)); then
     ufw --force disable || kw_log ERROR 'Không tắt lại được UFW sau lỗi; kiểm tra console cứu hộ.'
   fi
@@ -420,12 +424,57 @@ kw_tunnel_inbound_rollback() {
 kw_tunnel_inbound_denied() {
   local port=$1
   kw_fw_port_has_action_family "$port" tcp DENY 4 &&
-    kw_fw_port_has_action_family "$port" tcp DENY 6
+    kw_fw_port_has_action_family "$port" tcp DENY 6 &&
+    ! kw_fw_port_has_action_family "$port" tcp ALLOW 4 &&
+    ! kw_fw_port_has_action_family "$port" tcp ALLOW 6
+}
+
+kw_tunnel_inbound_close_rules() {
+  local port line state number
+  local -a numbers
+  for port in 80 443; do
+    if kw_tunnel_inbound_denied "$port"; then continue; fi
+    state=$(LC_ALL=C ufw status numbered) || return 2
+    while IFS= read -r line; do
+      if [[ $line =~ ^\[[[:space:]]*[0-9]+\][[:space:]]+${port}/tcp[[:space:]] &&
+            $line == *'ALLOW IN'* && $line != *"# kwvps-port-$port-tcp" ]]; then
+        kw_log ERROR "Còn ALLOW $port/tcp ngoài KwVPS; không tự xóa rule này."
+        return 2
+      fi
+    done <<< "$state"
+    mapfile -t numbers < <(kw_fw_rule_numbers port "$port" tcp | sort -nr)
+    if ((${#numbers[@]} > 0)); then
+      removed_allow_ports+=("$port")
+      for number in "${numbers[@]}"; do
+        ufw --force delete "$number" || return 1
+      done
+    fi
+    mapfile -t numbers < <(kw_fw_rule_numbers port-deny "$port" tcp)
+    if ((${#numbers[@]} > 0)); then
+      kw_tunnel_inbound_denied "$port" && continue
+      kw_log ERROR "Rule DENY $port/tcp có sẵn nhưng chưa chặn đủ IPv4/IPv6; kiểm tra UFW thủ công."
+      return 2
+    fi
+    # Record before invoking UFW: a command may add one family then fail.
+    created_ports+=("$port")
+    if ! ufw insert 1 deny "$port/tcp" comment "kwvps-port-deny-$port-tcp"; then
+      kw_log WARN "UFW không chèn được DENY $port/tcp ở đầu; thử thêm rule thường."
+      ufw deny "$port/tcp" comment "kwvps-port-deny-$port-tcp" || {
+        kw_log ERROR "UFW từ chối tạo DENY $port/tcp; xem lỗi UFW ngay phía trên."
+        return 1
+      }
+    fi
+    kw_tunnel_inbound_denied "$port" || {
+      kw_log ERROR "Không xác minh được DENY $port/tcp cho cả IPv4 và IPv6; trạng thái UFW hiện tại:"
+      LC_ALL=C ufw status numbered >&2 || true
+      return 1
+    }
+  done
 }
 
 kw_tunnel_inbound_change() (
   local action=$1 renewals='' port state line number ssh_ports ssh_port inbound_committed=0 was_inactive=0 removed_attempted=0
-  local -a created_ports=() removed_ports=() numbers=()
+  local -a created_ports=() removed_ports=() removed_allow_ports=() numbers=()
   ((EUID == 0)) || { kw_log ERROR 'Cần root để đổi inbound 80/443.'; return 2; }
   [[ $action == close || $action == open ]] || return 2
   kw_has ufw && kw_has flock || return 2
@@ -457,30 +506,7 @@ kw_tunnel_inbound_change() (
   trap kw_tunnel_inbound_rollback EXIT
   kw_fw_enable_safe || return 2
   if [[ $action == close ]]; then
-    for port in 80 443; do
-      mapfile -t numbers < <(kw_fw_rule_numbers port-deny "$port" tcp)
-      if ((${#numbers[@]} > 0)); then
-        kw_tunnel_inbound_denied "$port" && continue
-        kw_log ERROR "Rule DENY $port/tcp có sẵn nhưng chưa chặn đủ IPv4/IPv6; kiểm tra UFW thủ công."
-        return 2
-      fi
-      # Record before invoking UFW: a command may add one family then fail.
-      created_ports+=("$port")
-      if ! ufw insert 1 deny "$port/tcp" comment "kwvps-port-deny-$port-tcp"; then
-        kw_log WARN "UFW không chèn được DENY $port/tcp ở đầu; thử thêm rule thường."
-        ufw deny "$port/tcp" comment "kwvps-port-deny-$port-tcp" || {
-          kw_log ERROR "UFW từ chối tạo DENY $port/tcp; xem lỗi UFW ngay phía trên."
-          return 1
-        }
-      fi
-    done
-    for port in 80 443; do
-      kw_tunnel_inbound_denied "$port" || {
-        kw_log ERROR "Không xác minh được DENY $port/tcp cho cả IPv4 và IPv6; trạng thái UFW hiện tại:"
-        LC_ALL=C ufw status numbered >&2 || true
-        return 1
-      }
-    done
+    kw_tunnel_inbound_close_rules || return $?
     if [[ -n $renewals ]]; then
       printf 'Đang thử gia hạn ACME qua Tunnel khi inbound đã đóng...\n'
       certbot renew --dry-run --no-random-sleep-on-renew --non-interactive --quiet || {

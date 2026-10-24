@@ -70,6 +70,46 @@ setup() {
   ! kw_tunnel_inbound_denied 80
   UFW_HAS_V6=1 kw_tunnel_inbound_denied 80
 }
+
+@test "Tunnel close removes KwVPS ALLOW before inserting DENY" {
+  local allow80=1 allow443=1 deny80=0 deny443=0 delete_count=0 history=''
+  created_ports=() removed_allow_ports=()
+  kw_fw_rule_numbers() {
+    if [[ $1 == port ]]; then
+      if [[ $2 == 80 && $allow80 == 1 || $2 == 443 && $allow443 == 1 ]]; then
+        printf '1\n2\n'
+      fi
+    fi
+  }
+  kw_tunnel_inbound_denied() {
+    if [[ $1 == 80 ]]; then [[ $deny80 == 1 && $allow80 == 0 ]]
+    else [[ $deny443 == 1 && $allow443 == 0 ]]; fi
+  }
+  ufw() {
+    if [[ $1 == status ]]; then
+      printf 'Status: active\n'
+      if [[ $allow80 == 1 ]]; then printf '[ 1] 80/tcp ALLOW IN Anywhere # kwvps-port-80-tcp\n'; fi
+      if [[ $allow443 == 1 ]]; then printf '[ 2] 443/tcp ALLOW IN Anywhere # kwvps-port-443-tcp\n'; fi
+    elif [[ $1 == --force && $2 == delete ]]; then
+      history+="delete:$3 "
+      delete_count=$((delete_count + 1))
+      if ((delete_count == 2)); then allow80=0
+      elif ((delete_count == 4)); then allow443=0; fi
+    elif [[ $1 == insert ]]; then
+      history+="deny:$4 "
+      if [[ $4 == 80/tcp ]]; then [[ $allow80 == 0 ]] || return 1; deny80=1
+      else [[ $allow443 == 0 ]] || return 1; deny443=1; fi
+    else
+      return 2
+    fi
+  }
+  kw_tunnel_inbound_close_rules
+  [ "$allow80" -eq 0 ] && [ "$allow443" -eq 0 ]
+  [ "$deny80" -eq 1 ] && [ "$deny443" -eq 1 ]
+  [ "${removed_allow_ports[*]}" = '80 443' ]
+  [ "${created_ports[*]}" = '80 443' ]
+  [[ $history == delete:*deny:80/tcp*delete:*deny:443/tcp* ]]
+}
 @test "ingress mode defaults to DNS and rejects unsafe names" {
   kw_tunnel_site_mode_path() {
     kw_domain_valid "$1" || return 2
