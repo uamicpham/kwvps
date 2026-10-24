@@ -478,8 +478,18 @@ kw_laravel_node_extract_private() (
   }
 )
 
+kw_laravel_node_download_dir() {
+  local dir=$1 parent=${1%/*}
+  [[ -d $parent && ! -L $parent && ! -e $dir && ! -L $dir ]] || return 2
+  install -d -m 0700 -o _apt -g root -- "$dir" || return 1
+  runuser -u _apt -- test -w "$dir" || {
+    kw_log ERROR 'User _apt không ghi được thư mục tải Node.js riêng; chưa tải gói.'
+    return 2
+  }
+}
+
 kw_laravel_node_install() (
-  local candidate key fingerprint tmpdir expected actual owner=${1:-}
+  local candidate key fingerprint tmpdir download_dir expected actual owner=${1:-}
   local -a packages
   [[ -n $owner ]] || return 2
   if ! { kw_has curl && kw_has gpg && kw_has dpkg-deb && kw_has sha256sum; }; then
@@ -538,11 +548,14 @@ kw_laravel_node_install() (
   printf 'NodeSource candidate: %s. Sẽ giải nén riêng vào /usr/local/lib/kwvps/nodejs.\n' "$candidate"
   printf 'Không thay node/npm toàn VPS, không đổi PATH chung và không cài package hệ thống.\n'
   kw_prompt_yes_no_token 'Cài Node.js 24 riêng cho build Laravel của KwVPS?' 'LARAVEL-NODE24-PRIVATE' || return 0
+  download_dir=$tmpdir/download
+  kw_laravel_node_download_dir "$download_dir" || return 2
   (
-    cd -- "$tmpdir" || exit 1
+    cd -- "$download_dir" || exit 1
     apt-get "${KW_LARAVEL_NODE_APT_OPTS[@]}" download "nodejs=$candidate"
   ) || return 1
-  packages=("$tmpdir"/nodejs_*.deb)
+  chown root:root -- "$download_dir" || return 1
+  packages=("$download_dir"/nodejs_*.deb)
   [[ ${#packages[@]} -eq 1 && -f ${packages[0]} && ! -L ${packages[0]} ]] || {
     kw_log ERROR 'APT không tải đúng một gói nodejs; chưa cài.'; return 2;
   }
