@@ -827,20 +827,40 @@ kw_site_permissions_plan() {
   kw_site_lookup "$domain" || return 2
   printf 'Phân lại quyền sở hữu source của %s:\n' "$domain"
   printf '  Đường dẫn: %s\n  Chủ sở hữu: %s:www-data\n' "$KW_SITE_ROOT" "$KW_SITE_OWNER"
-  printf '  Giữ nguyên mode (quyền đọc/ghi/chạy); không xử lý symlink/hardlink hoặc filesystem khác.\n'
+  printf '  Hỗ trợ symlink nội bộ (Laravel/Node); từ chối symlink trỏ ngoài site hoặc hardlink.\n'
   printf '  Ghi manifest owner/group cũ vào %s.\n' "$KW_BACKUP_ROOT"
 }
 
 kw_site_permissions_apply_locked() (
-  local domain=$1 id manifest temp unsafe
+  local domain=$1 id manifest temp
   kw_site_lookup "$domain" || return 2
   kw_backup_source_preflight "$domain" || return 2
   id=${KW_SITE_OWNER#kw}
   [[ ! -L $KW_SITE_ROOT ]] || return 2
-  unsafe=$(find -P "$KW_SITE_ROOT" -xdev \( -type l -o -type f -links +1 \) -print -quit) || return 2
-  if [[ -n $unsafe ]]; then
-    kw_log ERROR 'Source có symlink/hardlink; từ chối đổi owner hàng loạt.'; return 2
+  if [[ -n $(find -P "$KW_SITE_ROOT" -xdev -type f -links +1 -print -quit) ]]; then
+    kw_log ERROR 'Source có hardlink; từ chối đổi owner hàng loạt để tránh ảnh hưởng ngoài site.'; return 2;
   fi
+  local safe_symlinks=0
+  if python3 - "$KW_SITE_ROOT" <<'PY'
+import os, sys
+site_root = os.path.realpath(sys.argv[1])
+sep = os.sep
+prefix = site_root if site_root.endswith(sep) else site_root + sep
+for dirpath, dirnames, filenames in os.walk(site_root, followlinks=False):
+    for name in dirnames + filenames:
+        p = os.path.join(dirpath, name)
+        if os.path.islink(p):
+            target = os.path.realpath(p)
+            if target != site_root and not target.startswith(prefix):
+                sys.exit(1)
+PY
+  then
+    safe_symlinks=1
+  fi
+  ((safe_symlinks)) || {
+    kw_log ERROR 'Source có symlink trỏ ra ngoài thư mục site; từ chối đổi owner hàng loạt.'
+    return 2
+  }
   if [[ ! -e $KW_BACKUP_ROOT && ! -L $KW_BACKUP_ROOT ]]; then
     install -d -m 0700 -o root -g root -- "$KW_BACKUP_ROOT" || return 1
   fi
@@ -854,6 +874,14 @@ kw_site_permissions_apply_locked() (
   find -P "$KW_SITE_ROOT" -xdev -exec chown -h -- "$KW_SITE_OWNER:www-data" '{}' + || {
     kw_log ERROR "Đổi owner chưa hoàn tất; manifest để đối chiếu: $manifest"; return 1;
   }
+  if [[ -f $KW_SITE_ROOT/deploy/shared/.env && ! -L $KW_SITE_ROOT/deploy/shared/.env ]]; then
+    chmod 0600 -- "$KW_SITE_ROOT/deploy/shared/.env" || return 1
+    chown -- "$KW_SITE_OWNER:$KW_SITE_OWNER" "$KW_SITE_ROOT/deploy/shared/.env" || return 1
+  fi
+  if [[ -d $KW_SITE_ROOT/deploy/shared/storage && ! -L $KW_SITE_ROOT/deploy/shared/storage ]]; then
+    find -P "$KW_SITE_ROOT/deploy/shared/storage" -type d -exec chmod 0750 '{}' + || return 1
+    find -P "$KW_SITE_ROOT/deploy/shared/storage" -type f -exec chmod 0660 '{}' + || return 1
+  fi
   printf 'Đã phân lại chủ sở hữu source %s; manifest cũ: %s\n' "$domain" "$manifest"
 )
 

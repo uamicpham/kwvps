@@ -445,6 +445,7 @@ reject kw_swap_change add 256 wrong
 output=$(kw_nginx_render_baseline)
 assert test "${output#*'server_tokens off;'}" != "$output"
 reject kw_nginx_restore example.com wrong.example.com
+reject kw_site_permissions example.com wrong.example.com
 reject kw_nginx_baseline wrong
 reject kw_cron_nano wrong
 kw_site_lookup() {
