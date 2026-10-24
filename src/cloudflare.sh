@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Trust only Cloudflare-published proxy ranges for CF-Connecting-IP in Nginx.
+# Trust Cloudflare's public proxy ranges globally. A Tunnel connector is
+# trusted only inside the server blocks of a site explicitly marked Tunnel.
 
 kw_cf_realip_target=/etc/nginx/conf.d/kwvps-cloudflare-realip.conf
 
@@ -7,7 +8,9 @@ kw_cf_realip_plan() {
   printf 'Cloudflare Real IP cho Nginx toàn VPS:\n'
   printf '  File: %s\n' "$kw_cf_realip_target"
   printf '  Nguồn: https://www.cloudflare.com/ips-v4 và /ips-v6\n'
-  printf '  Chỉ tin CF-Connecting-IP khi kết nối đến từ dải IP Cloudflare chính thức.\n'
+  printf '  Tin CF-Connecting-IP từ dải proxy Cloudflare công khai.\n'
+  printf '  Site đánh dấu Tunnel: tin thêm connector loopback chỉ trong vhost site đó.\n'
+  printf '  Tiến trình khác trên VPS vẫn có thể giả header khi gọi loopback của site Tunnel.\n'
   printf '  Kiểm tra CIDR, nginx -t rồi restart Nginx; lỗi sẽ trả cấu hình cũ.\n'
   printf '  Không đóng/mở port hoặc bật AntiDDoS/Under Attack.\n'
 }
@@ -34,9 +37,208 @@ for line in lines:
 ' "$path" "$family"
 }
 
+# A server-level set_real_ip_from replaces the http-level list in Nginx.
+# Include the global list again inside each Tunnel server before trusting the
+# connector's loopback peer. The public-only file stays suitable for the
+# DNS-site Cloudflare ban worker, which deliberately rejects loopback ranges.
+kw_cf_realip_vhost_overlay() {
+  local mode=${1:-} domain=${2:-} id=${3:-} vhost=${4:-}
+  [[ $mode == tunnel || $mode == dns ]] || return 2
+  kw_domain_valid "$domain" && kw_site_id_valid "$id" || return 2
+  if [[ -n $vhost ]]; then
+    [[ -f $vhost && ! -L $vhost ]] || return 2
+    kw_cf_realip_vhost_overlay_python "$mode" "$domain" "$id" "$vhost"
+  else
+    kw_cf_realip_vhost_overlay_python "$mode" "$domain" "$id" -
+  fi
+}
+
+# Keep the template renderers pure; apply the ingress-specific overlay only
+# when installing a newly rendered vhost.
+kw_cf_realip_render_for_site() {
+  local domain=$1 id=$2 mode
+  mode=$(kw_tunnel_site_mode "$domain") || return 2
+  case "$mode" in
+    dns) cat ;;
+    tunnel)
+      kw_cf_realip_public_config_valid || return 2
+      kw_cf_realip_vhost_overlay tunnel "$domain" "$id" ;;
+    *) kw_log ERROR "Ingress của $domain chưa xác định; chưa ghi đè vhost."; return 2 ;;
+  esac
+}
+
+kw_cf_realip_vhost_overlay_python() {
+  local script
+  script=$(cat <<'PY'
+import re
+import sys
+
+mode, domain, site_id, path = sys.argv[1:]
+if path == '-':
+    raw = sys.stdin.buffer.read(1024 * 1024 + 1)
+else:
+    with open(path, 'rb') as source:
+        raw = source.read(1024 * 1024 + 1)
+if not raw or len(raw) > 1024 * 1024 or b'\0' in raw or b'\r' in raw:
+    sys.exit(2)
+try:
+    lines = raw.decode('utf-8').splitlines(keepends=True)
+except UnicodeDecodeError:
+    sys.exit(2)
+if any(not line.endswith('\n') for line in lines):
+    sys.exit(2)
+if lines.count(f'# Managed by KwVPS. Site ID: {site_id}\n') != 1:
+    sys.exit(2)
+
+server_count = sum(bool(re.fullmatch(r'\s*server\s*\{\s*', line)) for line in lines)
+name_indices = [i for i, line in enumerate(lines)
+                if re.match(r'^\s*server_name\s+', line)]
+if server_count not in (1, 2) or len(name_indices) != server_count:
+    sys.exit(2)
+if any(lines[i].strip() != f'server_name {domain};' for i in name_indices):
+    sys.exit(2)
+
+def snippet(indent):
+    return [f'{indent}# KwVPS Tunnel Real IP (managed)\n',
+            f'{indent}include /etc/nginx/conf.d/kwvps-cloudflare-realip.conf;\n',
+            f'{indent}set_real_ip_from 127.0.0.1;\n',
+            f'{indent}set_real_ip_from ::1;\n']
+
+owned = set()
+result = []
+for i, line in enumerate(lines):
+    if i in owned:
+        continue
+    result.append(line)
+    if i not in name_indices:
+        continue
+    indent = re.match(r'^\s*', line).group()
+    managed = snippet(indent)
+    start = i + 1
+    if lines[start:start + len(managed)] == managed:
+        owned.update(range(start, start + len(managed)))
+    if mode == 'tunnel':
+        result.extend(managed)
+
+# No other real-IP directives or copies of the marker may coexist in this
+# vhost. A custom configuration needs manual review instead of a blind patch.
+for i, line in enumerate(lines):
+    if i in owned:
+        continue
+    stripped = line.strip()
+    if (stripped.startswith(('set_real_ip_from ', 'real_ip_header ',
+                             'real_ip_recursive ')) or
+        'kwvps-cloudflare-realip.conf' in stripped or
+        'KwVPS Tunnel Real IP (managed)' in stripped):
+        sys.exit(2)
+sys.stdout.buffer.write(''.join(result).encode('utf-8'))
+PY
+  ) || return 2
+  python3 -c "$script" "$1" "$2" "$3" "$4"
+}
+
+kw_cf_realip_public_config_valid() {
+  local file=${1:-$kw_cf_realip_target} mode
+  [[ -f $file && ! -L $file && $(stat -c %u -- "$file") == 0 ]] || return 2
+  mode=$(stat -c %a -- "$file") || return 2
+  [[ $mode =~ ^[0-7]{3,4}$ ]] && (( (8#$mode & 0022) == 0 )) || return 2
+  python3 - "$file" <<'PY'
+import ipaddress
+import pathlib
+import re
+import sys
+
+try:
+    lines = pathlib.Path(sys.argv[1]).read_text(encoding='ascii').splitlines()
+except (OSError, UnicodeError):
+    sys.exit(2)
+if (not lines or lines[0] !=
+        '# KwVPS: Cloudflare official proxy ranges. Do not add origin/client IPs here.' or
+        lines[-2:] != ['real_ip_header CF-Connecting-IP;', 'real_ip_recursive on;']):
+    sys.exit(2)
+networks = []
+for line in lines[1:-2]:
+    match = re.fullmatch(r'set_real_ip_from ([^;\s]+);', line)
+    if not match:
+        sys.exit(2)
+    try:
+        net = ipaddress.ip_network(match.group(1), strict=True)
+    except ValueError:
+        sys.exit(2)
+    if not net.is_global or net.prefixlen == 0 or str(net) != match.group(1):
+        sys.exit(2)
+    networks.append(net)
+if len(networks) < 10 or len(networks) != len(set(networks)) or \
+        {net.version for net in networks} != {4, 6}:
+    sys.exit(2)
+PY
+}
+
+kw_cf_realip_tunnel_candidates() {
+  local mode_file domain mode id candidate old backup
+  [[ ! -e /etc/kwvps/ingress && ! -L /etc/kwvps/ingress ]] ||
+    [[ -d /etc/kwvps/ingress && ! -L /etc/kwvps/ingress &&
+       $(stat -c %u:%a -- /etc/kwvps/ingress) == 0:700 ]] || return 2
+  for mode_file in /etc/kwvps/ingress/*.mode; do
+    [[ -e $mode_file || -L $mode_file ]] || continue
+    [[ -f $mode_file && ! -L $mode_file &&
+       $(stat -c %u:%a -- "$mode_file") == 0:600 ]] || return 2
+    domain=${mode_file##*/}; domain=${domain%.mode}
+    kw_domain_valid "$domain" || return 2
+    IFS= read -r mode < "$mode_file" || return 2
+    [[ $mode == dns || $mode == tunnel ]] || return 2
+    [[ $mode == tunnel ]] || continue
+    kw_site_lookup "$domain" || {
+      kw_log ERROR "Site Tunnel $domain không còn metadata hợp lệ; chưa cập nhật Real IP."
+      return 2
+    }
+    id=${KW_SITE_OWNER#kw}
+    [[ -f $KW_SITE_VHOST && ! -L $KW_SITE_VHOST &&
+       $(stat -c %u -- "$KW_SITE_VHOST") == 0 &&
+       -L $KW_SITE_ENABLED &&
+       $(readlink -f -- "$KW_SITE_ENABLED") == "$KW_SITE_VHOST" ]] || return 2
+    candidate=$(mktemp /etc/nginx/sites-available/.kwvps-realip.XXXXXXXX) || return 1
+    if ! kw_cf_realip_vhost_overlay tunnel "$domain" "$id" "$KW_SITE_VHOST" > "$candidate"; then
+      rm -f -- "$candidate"
+      kw_log ERROR "Vhost $domain có cấu trúc/Real IP tùy biến; chưa áp Real IP Tunnel. Kiểm tra vhost thủ công."
+      return 2
+    fi
+    if cmp -s -- "$candidate" "$KW_SITE_VHOST"; then
+      rm -f -- "$candidate"
+      continue
+    fi
+    old="$KW_CF_STAGE/old-$id.vhost"
+    [[ ! -e $old && ! -L $old ]] || { rm -f -- "$candidate"; return 2; }
+    cp -p -- "$KW_SITE_VHOST" "$old" || { rm -f -- "$candidate"; return 1; }
+    kw_nginx_backup_file "$KW_SITE_VHOST" "tunnel-realip-$id" || {
+      rm -f -- "$candidate" "$old"; return 1;
+    }
+    backup=$KW_NGINX_BACKUP
+    KW_CF_SITE_CANDIDATES+=("$candidate")
+    KW_CF_SITE_TARGETS+=("$KW_SITE_VHOST")
+    KW_CF_SITE_OLD+=("$old")
+    KW_CF_SITE_BACKUPS+=("$backup")
+  done
+}
+
+kw_cf_realip_cleanup() {
+  local file
+  [[ -z $KW_CF_CANDIDATE ]] || rm -f -- "$KW_CF_CANDIDATE"
+  for file in "${KW_CF_SITE_CANDIDATES[@]}" "${KW_CF_SITE_OLD[@]}"; do
+    [[ -z $file ]] || rm -f -- "$file"
+  done
+  rm -f -- "$KW_CF_STAGE/ips-v4" "$KW_CF_STAGE/ips-v6"
+  rmdir -- "$KW_CF_STAGE" 2>/dev/null || true
+}
+
 kw_cf_realip_rollback() {
+  local i
   ((KW_CF_DONE == 0)) || return 0
-  ((KW_CF_REPLACED)) || return 0
+  ((KW_CF_REPLACED || KW_CF_SITE_TOUCHED)) || return 0
+  for ((i = 0; i < KW_CF_SITE_TOUCHED; i++)); do
+    cp -p -- "${KW_CF_SITE_OLD[i]}" "${KW_CF_SITE_TARGETS[i]}" ||
+      kw_log ERROR "Không khôi phục được vhost ${KW_CF_SITE_TARGETS[i]}."
+  done
   if [[ -n $KW_CF_OLD && -f $KW_CF_OLD ]]; then
     cp -a -- "$KW_CF_OLD" "$kw_cf_realip_target" || kw_log ERROR 'Không khôi phục được Real IP cũ.'
   elif ((KW_CF_REPLACED)); then
@@ -53,8 +255,10 @@ kw_cf_realip_rollback() {
 }
 
 kw_cf_realip_apply() (
-  local confirm=${1:-} stage='' candidate='' stamp='' backup=''
-  local KW_CF_DONE=0 KW_CF_REPLACED=0 KW_CF_OLD=''
+  local confirm=${1:-} stamp='' backup='' i
+  local KW_CF_DONE=0 KW_CF_REPLACED=0 KW_CF_OLD='' KW_CF_SITE_TOUCHED=0
+  local KW_CF_STAGE='' KW_CF_CANDIDATE=''
+  local -a KW_CF_SITE_CANDIDATES=() KW_CF_SITE_TARGETS=() KW_CF_SITE_OLD=() KW_CF_SITE_BACKUPS=()
   [[ $confirm == UPDATE-CLOUDFLARE-REALIP ]] || return 2
   ((EUID == 0)) || return 2
   kw_os_supported '' || return 2
@@ -64,27 +268,34 @@ kw_cf_realip_apply() (
   [[ ! -L $kw_cf_realip_target ]] || return 2
   nginx -V 2>&1 | grep -Fq -- '--with-http_realip_module' || return 2
   nginx -t >/dev/null 2>&1 && systemctl is-active --quiet nginx || return 2
-  exec 9>/run/lock/kwvps-cloudflare.lock || return 2
+  # Match the sites -> nginx -> cloudflare lock order used by domain rename.
+  exec 9>/run/lock/kwvps-sites.lock || return 2
   flock -n 9 || return 1
-  stage=$(mktemp -d /run/kwvps-cloudflare.XXXXXXXX) || return 1
-  trap 'rm -f -- "$stage/ips-v4" "$stage/ips-v6"; rmdir -- "$stage" 2>/dev/null || true' EXIT
+  exec 8>/run/lock/kwvps-nginx.lock || return 2
+  flock -n 8 || return 1
+  exec 7>/run/lock/kwvps-cloudflare.lock || return 2
+  flock -n 7 || return 1
+  KW_CF_STAGE=$(mktemp -d /run/kwvps-cloudflare.XXXXXXXX) || return 1
+  trap 'kw_cf_realip_rollback; kw_cf_realip_cleanup' EXIT
   curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 --max-time 25 \
-    https://www.cloudflare.com/ips-v4 -o "$stage/ips-v4" || return 1
+    https://www.cloudflare.com/ips-v4 -o "$KW_CF_STAGE/ips-v4" || return 1
   curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 --max-time 25 \
-    https://www.cloudflare.com/ips-v6 -o "$stage/ips-v6" || return 1
-  candidate=$(mktemp /etc/nginx/conf.d/.kwvps-cloudflare.XXXXXXXX) || return 1
-  trap 'rm -f -- "$candidate" "$stage/ips-v4" "$stage/ips-v6"; rmdir -- "$stage" 2>/dev/null || true; kw_cf_realip_rollback' EXIT
+    https://www.cloudflare.com/ips-v6 -o "$KW_CF_STAGE/ips-v6" || return 1
+  KW_CF_CANDIDATE=$(mktemp /etc/nginx/conf.d/.kwvps-cloudflare.XXXXXXXX) || return 1
   {
     printf '# KwVPS: Cloudflare official proxy ranges. Do not add origin/client IPs here.\n'
-    kw_cf_realip_lines "$stage/ips-v4" 4 || return 2
-    kw_cf_realip_lines "$stage/ips-v6" 6 || return 2
+    kw_cf_realip_lines "$KW_CF_STAGE/ips-v4" 4 || return 2
+    kw_cf_realip_lines "$KW_CF_STAGE/ips-v6" 6 || return 2
     printf 'real_ip_header CF-Connecting-IP;\nreal_ip_recursive on;\n'
-  } > "$candidate" || return 2
-  chmod 0644 -- "$candidate" || return 1
+  } > "$KW_CF_CANDIDATE" || return 2
+  chmod 0644 -- "$KW_CF_CANDIDATE" || return 1
+  kw_cf_realip_public_config_valid "$KW_CF_CANDIDATE" || return 2
+  kw_cf_realip_tunnel_candidates || return 2
   if [[ -e $kw_cf_realip_target ]]; then
     [[ -f $kw_cf_realip_target && $(stat -c %u -- "$kw_cf_realip_target") == 0 ]] || return 2
   fi
-  if [[ -f $kw_cf_realip_target ]] && cmp -s -- "$candidate" "$kw_cf_realip_target"; then
+  if [[ -f $kw_cf_realip_target ]] && cmp -s -- "$KW_CF_CANDIDATE" "$kw_cf_realip_target" &&
+     ((${#KW_CF_SITE_CANDIDATES[@]} == 0)); then
     KW_CF_DONE=1
     printf 'Cloudflare Real IP đã đúng cấu hình; không cần restart Nginx.\n'
     return 0
@@ -99,13 +310,24 @@ kw_cf_realip_apply() (
   elif [[ -e $kw_cf_realip_target ]]; then
     return 2
   fi
-  mv -T -- "$candidate" "$kw_cf_realip_target" || return 1
-  KW_CF_REPLACED=1
+  if [[ ! -f $kw_cf_realip_target ]] || ! cmp -s -- "$KW_CF_CANDIDATE" "$kw_cf_realip_target"; then
+    mv -T -- "$KW_CF_CANDIDATE" "$kw_cf_realip_target" || return 1
+    KW_CF_CANDIDATE=''
+    KW_CF_REPLACED=1
+  fi
+  for ((i = 0; i < ${#KW_CF_SITE_CANDIDATES[@]}; i++)); do
+    chmod 0644 -- "${KW_CF_SITE_CANDIDATES[i]}" || return 1
+    mv -T -- "${KW_CF_SITE_CANDIDATES[i]}" "${KW_CF_SITE_TARGETS[i]}" || return 1
+    KW_CF_SITE_TOUCHED=$((KW_CF_SITE_TOUCHED + 1))
+  done
   nginx -t >/dev/null 2>&1 || return 1
   systemctl restart nginx || return 1
   systemctl is-active --quiet nginx || return 1
   KW_CF_DONE=1
   printf 'Đã cập nhật Cloudflare Real IP; bản cấu hình cũ: %s\n' "${KW_CF_OLD:-không có}"
+  for ((i = 0; i < ${#KW_CF_SITE_TARGETS[@]}; i++)); do
+    printf '  Tunnel vhost: %s; bản trước: %s\n' "${KW_CF_SITE_TARGETS[i]}" "${KW_CF_SITE_BACKUPS[i]}"
+  done
 )
 
 kw_cf_realip_interactive() {

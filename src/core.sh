@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Shared primitives. No writes, network access, eval, or automatic sudo.
-readonly KW_VERSION='0.50.10'
+readonly KW_VERSION='0.50.11'
 KW_PREVIEW=0
 
 kw_log() {
@@ -142,6 +142,10 @@ kw_main() {
   esac
   if [[ $(uname -s) != Linux ]]; then
     kw_log ERROR 'Chức năng quản trị cần Linux; dùng --preview để xem menu trên máy phát triển.'
+    return 2
+  fi
+  if [[ ${1:-menu} == menu && $EUID -ne 0 ]]; then
+    kw_log ERROR 'Cần quyền quản trị để dùng menu KwVPS. Hãy chạy: sudo kwvps'
     return 2
   fi
   case "${1:-menu}" in

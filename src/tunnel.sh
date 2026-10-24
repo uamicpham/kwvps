@@ -125,12 +125,35 @@ kw_tunnel_site_mode() {
   printf '%s\n' "$value"
 }
 
+kw_tunnel_realip_vhost_stage() {
+  local domain=$1 mode=$2 candidate=$3 id
+  kw_site_lookup "$domain" || return 2
+  id=${KW_SITE_OWNER#kw}
+  [[ -f $KW_SITE_VHOST && ! -L $KW_SITE_VHOST &&
+     $(stat -c %u -- "$KW_SITE_VHOST") == 0 &&
+     -L $KW_SITE_ENABLED &&
+     $(readlink -f -- "$KW_SITE_ENABLED") == "$KW_SITE_VHOST" ]] || {
+    kw_log ERROR "Vhost $domain không còn do KwVPS quản lý; chưa đổi chế độ Tunnel."
+    return 2
+  }
+  if [[ $mode == tunnel ]] && ! kw_cf_realip_public_config_valid; then
+    kw_log ERROR 'Cấu hình Cloudflare Real IP công khai chưa an toàn; cập nhật mục Cloudflare Real IP trước.'
+    return 2
+  fi
+  if ! kw_cf_realip_vhost_overlay "$mode" "$domain" "$id" "$KW_SITE_VHOST" > "$candidate"; then
+    kw_log ERROR "Vhost $domain có cấu trúc/Real IP tùy biến; chưa tự chèn Tunnel Real IP. Kiểm tra vhost thủ công."
+    return 2
+  fi
+}
+
 kw_tunnel_site_mode_set() (
-  local domain=${1,,} mode=$2 confirm=$3 path stage
+  local domain=${1,,} mode=$2 confirm=$3 path stage='' vhost_temp='' old_mode='' backup=''
+  local vhost='' changed_vhost=0 changed_mode=0 committed=0
   kw_domain_valid "$domain" && [[ $mode == dns || $mode == tunnel ]] &&
     [[ $confirm == "INGRESS:$domain:$mode" ]] || return 2
   ((EUID == 0)) && kw_os_supported '' || return 2
-  kw_site_lookup "$domain" || return 2
+  kw_site_lookup "$domain" && kw_nginx_ready || return 2
+  nginx -t >/dev/null 2>&1 || return 2
   if [[ $mode == tunnel ]]; then
     [[ ! -e /etc/kwvps/cloudflare/antiddos/$domain.rate &&
        ! -L /etc/kwvps/cloudflare/antiddos/$domain.rate ]] || {
@@ -140,19 +163,55 @@ kw_tunnel_site_mode_set() (
       kw_log ERROR 'cloudflared chưa active.'; return 2;
     }
   fi
+  # Follow the sites -> nginx -> cloudflare order used by domain rename.
+  exec 9>/run/lock/kwvps-sites.lock || return 2
+  flock -n 9 || return 1
+  exec 8>/run/lock/kwvps-nginx.lock || return 2
+  flock -n 8 || return 1
+  exec 7>/run/lock/kwvps-cloudflare.lock || return 2
+  flock -n 7 || return 1
+  kw_site_lookup "$domain" || return 2
+  if [[ $mode == tunnel ]]; then
+    [[ ! -e /etc/kwvps/cloudflare/antiddos/$domain.rate &&
+       ! -L /etc/kwvps/cloudflare/antiddos/$domain.rate ]] || return 2
+    systemctl is-active --quiet cloudflared.service || return 2
+  fi
   install -d -o root -g root -m 0700 -- /etc/kwvps/ingress || return 1
   [[ -d /etc/kwvps/ingress && ! -L /etc/kwvps/ingress &&
      $(stat -c %u:%a -- /etc/kwvps/ingress) == 0:700 ]] || return 2
   path=$(kw_tunnel_site_mode_path "$domain") || return 2
   [[ ! -e $path && ! -L $path ]] || {
     [[ -f $path && ! -L $path && $(stat -c %u:%a -- "$path") == 0:600 ]] || return 2;
+    IFS= read -r old_mode < "$path" || return 2
+    [[ $old_mode == dns || $old_mode == tunnel ]] || return 2
   }
-  stage=$(mktemp /etc/kwvps/ingress/.mode.XXXXXXXX) || return 1
-  trap 'rm -f -- "$stage"' EXIT
-  chmod 0600 -- "$stage" || return 1
-  printf '%s\n' "$mode" > "$stage" || return 1
-  mv -T -- "$stage" "$path" || return 1
-  printf 'Đã ghi chế độ %s cho %s. Route/DNS trên Cloudflare cần được đối chiếu riêng.\n' "$mode" "$domain"
+  vhost=$KW_SITE_VHOST
+  vhost_temp=$(mktemp /etc/nginx/sites-available/.kwvps-tunnel-realip.XXXXXXXX) || return 1
+  trap 'if (( ! committed )); then if ((changed_vhost)); then install -m 0644 -o root -g root -- "$backup" "$vhost" || kw_log ERROR "Cần phục hồi vhost từ $backup"; fi; if ((changed_mode)); then if [[ -n $old_mode ]]; then printf "%s\n" "$old_mode" > "$path" && chmod 0600 -- "$path" || kw_log ERROR "Cần phục hồi chế độ ingress: $path"; else rm -f -- "$path" || kw_log ERROR "Cần gỡ chế độ ingress mới: $path"; fi; fi; if ((changed_vhost)); then kw_nginx_test_restart || kw_log ERROR "Cần kiểm tra Nginx sau rollback: $domain"; fi; fi; [[ -z $stage ]] || rm -f -- "$stage"; [[ -z $vhost_temp ]] || rm -f -- "$vhost_temp"' EXIT
+  kw_tunnel_realip_vhost_stage "$domain" "$mode" "$vhost_temp" || return 2
+  if ! cmp -s -- "$vhost_temp" "$vhost"; then
+    kw_nginx_backup_file "$vhost" "tunnel-realip-${KW_SITE_OWNER#kw}" || return 1
+    backup=$KW_NGINX_BACKUP
+    chmod 0644 -- "$vhost_temp" || return 1
+    mv -T -- "$vhost_temp" "$vhost" || return 1
+    vhost_temp=''
+    changed_vhost=1
+  fi
+  if [[ $old_mode != "$mode" ]]; then
+    stage=$(mktemp /etc/kwvps/ingress/.mode.XXXXXXXX) || return 1
+    chmod 0600 -- "$stage" || return 1
+    printf '%s\n' "$mode" > "$stage" || return 1
+    mv -T -- "$stage" "$path" || return 1
+    stage=''
+    changed_mode=1
+  fi
+  if ((changed_vhost)); then kw_nginx_test_restart || return 1; fi
+  committed=1
+  printf 'Đã ghi chế độ %s cho %s; Route/DNS trên Cloudflare cần đối chiếu riêng.\n' "$mode" "$domain"
+  if ((changed_vhost)); then
+    printf 'Đã áp Real IP riêng cho vhost Tunnel và restart Nginx; bản trước: %s\n' "$backup"
+    printf 'Lưu ý: tiến trình local có thể giả CF-Connecting-IP khi gọi loopback của site Tunnel.\n'
+  fi
 )
 
 kw_tunnel_site_mode_interactive() {

@@ -1,5 +1,12 @@
 # Tiến độ KwVPS
 
+## 0.50.11 — 24/10/2026
+
+- Sửa deploy Laravel chạy từ thư mục `/` trước khi hạ quyền sang user site; tránh lỗi `find` khi menu được gọi từ `/root`. `deploy/current` chỉ xuất hiện sau khi Composer/frontend/quyền file hoàn tất, ngay trước bước đổi vhost và health check. Menu build còn hai lựa chọn thường dùng (tự nhận/bỏ qua); npm, pnpm, yarn nằm dưới mục nâng cao.
+- Bổ sung đường cài Node.js 24 riêng cho build KwVPS khi VPS đã có Node/npm cũ: xác minh khóa/chỉ mục APT NodeSource và SHA-256 gói, giải nén vào `/usr/local/lib/kwvps/nodejs`, không thay Node toàn hệ thống. Chưa thử cài đầu-cuối trên VPS thật.
+- Site được đánh dấu Tunnel có thể nhận `CF-Connecting-IP` từ connector loopback trong vhost riêng; file CIDR toàn cục vẫn chỉ tin IP proxy Cloudflare công khai. Đổi mode và cập nhật Real IP kiểm tra `nginx -t`, restart và có rollback. Tiến trình local truy cập loopback cùng vhost vẫn có thể giả header, nên cần cách ly origin nếu site chạy mã không tin cậy.
+- Smoke cục bộ đạt 626 phép kiểm tra và 9 kiểm tra hệ thống mô phỏng. Chưa áp lên VPS production và chưa xác minh request thật qua Tunnel sau bản sửa này.
+
 ## 0.50.1 — bộ cài ghim release, 22/10/2026
 
 - GitHub Release `v0.50.0` đã tạo công khai; bản 0.50.1 bổ sung kiểm tra x86_64 và cho bootstrap chọn tag cố định. 531 smoke, 9 system, 172 Bats, 2 Python, ShellCheck và checksum package đã đạt trên bản sao ở VPS lab.

@@ -4,7 +4,7 @@ Dự án script quản lý VPS cho **Ubuntu Server 24.04 LTS sạch, x86_64 và 
 
 Sau khi cài, lệnh mở menu là `kwvps`.
 
-## Laravel dùng chung cho từng site (0.50.10)
+## Laravel dùng chung cho từng site (0.50.11)
 
 Mục **Kiểm tra trạng thái/công cụ** liệt kê công cụ còn thiếu và cho chọn cài từng công cụ sau khi xem kế hoạch, xác nhận `y/N`; chỉ cài frontend manager mà dự án cần. Mục **Sửa .env** có thể sửa owner/quyền file hiện có sau xác nhận, không hiển thị hay thay nội dung.
 
@@ -14,7 +14,7 @@ Deploy yêu cầu Git, PHP CLI đúng phiên bản site và Composer; frontend c
 
 ## Trạng thái
 
-Mã nguồn phiên bản `0.50.10`; kiểm tra [GitHub Releases](https://github.com/uamicpham/kwvps/releases) để biết bản đã công bố. API token Cloudflare dùng riêng theo site; backup cấu hình domain có thể kèm token mã hóa bằng mật khẩu. Xem [ghi chú 0.50.10](docs/RELEASE-NOTES-0.50.10.md) và [bảng trạng thái](docs/TRANG-THAI-CHUC-NANG.md).
+Mã nguồn phiên bản `0.50.11`; kiểm tra [GitHub Releases](https://github.com/uamicpham/kwvps/releases) để biết bản đã công bố. API token Cloudflare dùng riêng theo site; backup cấu hình domain có thể kèm token mã hóa bằng mật khẩu. Xem [ghi chú 0.50.11](docs/RELEASE-NOTES-0.50.11.md) và [bảng trạng thái](docs/TRANG-THAI-CHUC-NANG.md).
 
 Quản lý Sites có tạo, đổi tên miền HTTP nguyên bản, clone source/code, xóa với hai lựa chọn giữ vùng phục hồi/xóa sạch và phân lại quyền. Menu Backup có phục hồi hoặc xóa sạch gói site đã giữ. Tunnel/route thật đã được thử trên VPS lab; đổi tên site không tự cập nhật DNS/route Cloudflare hoặc URL ứng dụng. Các thao tác không xóa dùng xác nhận `y/N`; xóa yêu cầu gõ lại đối tượng. **Không cài đè lên VPS LarVPS, web stack có sẵn hoặc máy chứa website/dữ liệu.**
 

@@ -122,6 +122,21 @@ server {
 EOF
 }
 
+# Compare an exact KwVPS template while allowing only KwVPS's managed Tunnel
+# Real-IP overlay. Custom Nginx directives still make the comparison fail.
+kw_site_vhost_matches() {
+  local file=$1 domain=$2 id=$3 normalized expected
+  shift 3
+  [[ -f $file && ! -L $file ]] || return 2
+  cmp -s -- "$file" <("$@") && return 0
+  grep -Fq '# KwVPS Tunnel Real IP (managed)' -- "$file" || return 1
+  # Sentinels preserve trailing newlines in command substitution; a failed
+  # overlay must never be mistaken for an empty/valid template.
+  normalized=$(kw_cf_realip_vhost_overlay dns "$domain" "$id" "$file" && printf '\001') || return 2
+  expected=$("$@" && printf '\001') || return 2
+  [[ $normalized == "$expected" ]]
+}
+
 kw_site_list() {
   local file domain php id key value found=0
   if [[ -e /etc/kwvps/sites && ! -r /etc/kwvps/sites ]]; then
@@ -1015,18 +1030,18 @@ kw_site_remove_preflight() {
     kw_log ERROR 'Pool đã tùy chỉnh; không tự gỡ.'; return 2;
   }
   KW_REMOVE_RENEWAL=''
-  if ! cmp -s -- "$KW_SITE_VHOST" <(kw_site_render_vhost "$domain" "$id") &&
-     ! cmp -s -- "$KW_SITE_VHOST" <(kw_laravel_render_vhost http "$domain" "$id"); then
-    if cmp -s -- "$KW_SITE_VHOST" <(kw_ssl_render_paid_vhost "$domain" "$id") ||
-       cmp -s -- "$KW_SITE_VHOST" <(kw_laravel_render_vhost paid "$domain" "$id"); then
+  if ! kw_site_vhost_matches "$KW_SITE_VHOST" "$domain" "$id" kw_site_render_vhost "$domain" "$id" &&
+     ! kw_site_vhost_matches "$KW_SITE_VHOST" "$domain" "$id" kw_laravel_render_vhost http "$domain" "$id"; then
+    if kw_site_vhost_matches "$KW_SITE_VHOST" "$domain" "$id" kw_ssl_render_paid_vhost "$domain" "$id" ||
+       kw_site_vhost_matches "$KW_SITE_VHOST" "$domain" "$id" kw_laravel_render_vhost paid "$domain" "$id"; then
       [[ -d /etc/kwvps/certs/$id && ! -L /etc/kwvps/certs/$id && \
          -f /etc/kwvps/certs/$id/fullchain.pem && ! -L /etc/kwvps/certs/$id/fullchain.pem && \
          -f /etc/kwvps/certs/$id/privkey.pem && ! -L /etc/kwvps/certs/$id/privkey.pem ]] || return 2
     else
-      if ! cmp -s -- "$KW_SITE_VHOST" <(kw_ssl_render_vhost "$domain" "$id") &&
-         ! cmp -s -- "$KW_SITE_VHOST" <(kw_ssl_render_vhost "$domain" "$id" zerossl) &&
-         ! cmp -s -- "$KW_SITE_VHOST" <(kw_laravel_render_vhost letsencrypt "$domain" "$id") &&
-         ! cmp -s -- "$KW_SITE_VHOST" <(kw_laravel_render_vhost zerossl "$domain" "$id"); then
+      if ! kw_site_vhost_matches "$KW_SITE_VHOST" "$domain" "$id" kw_ssl_render_vhost "$domain" "$id" &&
+         ! kw_site_vhost_matches "$KW_SITE_VHOST" "$domain" "$id" kw_ssl_render_vhost "$domain" "$id" zerossl &&
+         ! kw_site_vhost_matches "$KW_SITE_VHOST" "$domain" "$id" kw_laravel_render_vhost letsencrypt "$domain" "$id" &&
+         ! kw_site_vhost_matches "$KW_SITE_VHOST" "$domain" "$id" kw_laravel_render_vhost zerossl "$domain" "$id"; then
         kw_log ERROR 'Vhost đã tùy chỉnh; không tự gỡ.'; return 2
       fi
       renew="/etc/letsencrypt/renewal/${domain}.conf"
@@ -1201,16 +1216,16 @@ kw_site_retired_preflight() {
      -L $dir/enabled.conf && $(readlink -- "$dir/enabled.conf") == "$KW_SITE_VHOST" ]] || return 2
   cmp -s -- "$dir/pool.conf" <(kw_site_render_pool "$id" "$KW_SITE_OWNER") || return 2
   KW_RETIRED_RENEWAL=''
-  if ! cmp -s -- "$dir/vhost.conf" <(kw_site_render_vhost "$domain" "$id") &&
-     ! cmp -s -- "$dir/vhost.conf" <(kw_laravel_render_vhost http "$domain" "$id"); then
-    if cmp -s -- "$dir/vhost.conf" <(kw_ssl_render_paid_vhost "$domain" "$id") ||
-       cmp -s -- "$dir/vhost.conf" <(kw_laravel_render_vhost paid "$domain" "$id"); then
+  if ! kw_site_vhost_matches "$dir/vhost.conf" "$domain" "$id" kw_site_render_vhost "$domain" "$id" &&
+     ! kw_site_vhost_matches "$dir/vhost.conf" "$domain" "$id" kw_laravel_render_vhost http "$domain" "$id"; then
+    if kw_site_vhost_matches "$dir/vhost.conf" "$domain" "$id" kw_ssl_render_paid_vhost "$domain" "$id" ||
+       kw_site_vhost_matches "$dir/vhost.conf" "$domain" "$id" kw_laravel_render_vhost paid "$domain" "$id"; then
       [[ -f /etc/kwvps/certs/$id/fullchain.pem && -f /etc/kwvps/certs/$id/privkey.pem ]] || return 2
     else
-      if ! cmp -s -- "$dir/vhost.conf" <(kw_ssl_render_vhost "$domain" "$id") &&
-         ! cmp -s -- "$dir/vhost.conf" <(kw_ssl_render_vhost "$domain" "$id" zerossl) &&
-         ! cmp -s -- "$dir/vhost.conf" <(kw_laravel_render_vhost letsencrypt "$domain" "$id") &&
-         ! cmp -s -- "$dir/vhost.conf" <(kw_laravel_render_vhost zerossl "$domain" "$id"); then
+      if ! kw_site_vhost_matches "$dir/vhost.conf" "$domain" "$id" kw_ssl_render_vhost "$domain" "$id" &&
+         ! kw_site_vhost_matches "$dir/vhost.conf" "$domain" "$id" kw_ssl_render_vhost "$domain" "$id" zerossl &&
+         ! kw_site_vhost_matches "$dir/vhost.conf" "$domain" "$id" kw_laravel_render_vhost letsencrypt "$domain" "$id" &&
+         ! kw_site_vhost_matches "$dir/vhost.conf" "$domain" "$id" kw_laravel_render_vhost zerossl "$domain" "$id"; then
         return 2
       fi
       [[ -f $dir/renewal.conf && ! -L $dir/renewal.conf ]] || return 2

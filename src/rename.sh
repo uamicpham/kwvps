@@ -11,7 +11,7 @@ kw_site_rename_plan() {
   [[ $old_id != "$new_id" ]] || return 2
   printf 'Đổi domain %s → %s (PHP %s).\n' "$old" "$new" "$php"
   printf 'Site ID/user: %s → %s. Source, pool, socket, vhost và metadata sẽ chuyển theo ID mới.\n' "$old_id" "$new_id"
-  printf 'Chỉ hỗ trợ vhost HTTP nguyên bản. Nhãn DNS và Nginx rate limit local (nếu có) sẽ chuyển theo tên miền; SSL, DNS bên ngoài, URL ứng dụng, cron, Tunnel và backup độc lập không tự đổi.\n'
+  printf 'Chỉ hỗ trợ vhost HTTP nguyên bản. Nhãn ingress/Real IP Tunnel và Nginx rate limit local (nếu có) sẽ chuyển theo tên miền; route Tunnel/DNS bên ngoài, SSL, URL ứng dụng, cron và backup độc lập không tự đổi.\n'
   local ingress_mode
   ingress_mode=$(kw_tunnel_site_mode "$old") || return 2
   if [[ $ingress_mode != dns ]]; then
@@ -99,9 +99,17 @@ kw_site_rename_preflight() {
     kw_log ERROR 'Root cron có tham chiếu site cũ; cần chỉnh cron có kiểm soát trước khi đổi tên.'
     return 2
   fi
-  cmp -s -- "$old_vhost" <(kw_site_render_vhost "$old" "$old_id") || {
+  kw_site_vhost_matches "$old_vhost" "$old" "$old_id" kw_site_render_vhost "$old" "$old_id" || {
     kw_log ERROR 'Đổi tên chỉ hỗ trợ vhost HTTP nguyên bản; không đụng SSL/cấu hình tùy biến.'; return 2;
   }
+  if [[ $ingress == tunnel ]]; then
+    kw_cf_realip_public_config_valid || return 2
+    grep -Fq '# KwVPS Tunnel Real IP (managed)' "$old_vhost" || {
+      kw_log ERROR 'Site Tunnel chưa có Real IP trong vhost; cập nhật Cloudflare Real IP trước khi đổi tên.'; return 2;
+    }
+  elif grep -Fq '# KwVPS Tunnel Real IP (managed)' "$old_vhost"; then
+    kw_log ERROR 'Vhost còn Real IP Tunnel nhưng ingress không phải Tunnel; cần đồng bộ trước khi đổi tên.'; return 2
+  fi
   cmp -s -- "$old_pool" <(kw_site_render_pool "$old_id" "$old_owner") || {
     kw_log ERROR 'Pool PHP đã tùy chỉnh; cần sao lưu và đưa về mẫu trước khi đổi tên.'; return 2;
   }
@@ -226,7 +234,12 @@ kw_site_rename_locked() (
   chmod 0700 -- "$KW_RENAME_STAGE" || return 1
   trap kw_site_rename_rollback EXIT
   kw_site_render_pool "$new_id" "$KW_RENAME_NEW_OWNER" > "$KW_RENAME_STAGE/new-pool" || return 1
-  kw_site_render_vhost "$new" "$new_id" > "$KW_RENAME_STAGE/new-vhost" || return 1
+  if [[ $(kw_tunnel_site_mode "$old") == tunnel ]]; then
+    kw_site_render_vhost "$new" "$new_id" |
+      kw_cf_realip_vhost_overlay tunnel "$new" "$new_id" > "$KW_RENAME_STAGE/new-vhost" || return 1
+  else
+    kw_site_render_vhost "$new" "$new_id" > "$KW_RENAME_STAGE/new-vhost" || return 1
+  fi
   printf 'domain=%s\nsite_id=%s\nphp_version=%s\nowner=%s\n' \
     "$new" "$new_id" "$KW_RENAME_PHP" "$KW_RENAME_NEW_OWNER" > "$KW_RENAME_STAGE/new-meta" || return 1
   install -d -m 0700 -- "$KW_RENAME_STAGE/db" || return 1

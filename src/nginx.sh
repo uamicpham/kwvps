@@ -68,7 +68,8 @@ kw_nginx_restore_locked() (
   if grep -Eq '(^|[[:space:]])(listen[[:space:]]+.*443|ssl_certificate)' "$KW_SITE_VHOST"; then
     kw_log ERROR 'Vhost có SSL; không ghi đè chứng chỉ bằng mẫu HTTP.'; return 2
   fi
-  expected=$(kw_site_render_vhost "$domain" "$id") || return 1
+  expected=$(kw_site_render_vhost "$domain" "$id" |
+    kw_cf_realip_render_for_site "$domain" "$id") || return 1
   if [[ $(< "$KW_SITE_VHOST") == "$expected" ]]; then
     printf 'Vhost đã đúng mẫu KwVPS; không thay đổi.\n'; return 0
   fi

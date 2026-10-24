@@ -22,6 +22,7 @@ setup() {
 
 @test "Laravel Node status rejects obsolete Node and accepts current even LTS" {
   kw_has() { [[ $1 == node || $1 == npm ]]; }
+  npm() { printf '10.0.0\n'; }
   node() { printf 'v18.20.8\n'; }
   ! kw_laravel_node_ready
   node() { printf 'v22.11.0\n'; }

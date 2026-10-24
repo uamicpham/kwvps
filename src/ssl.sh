@@ -138,11 +138,11 @@ kw_ssl_require_pristine_http() {
   id=${KW_SITE_OWNER#kw}
   [[ -f $KW_SITE_VHOST && ! -L $KW_SITE_VHOST && $(stat -c %u -- "$KW_SITE_VHOST") == 0 && \
      -L $KW_SITE_ENABLED && $(readlink -f -- "$KW_SITE_ENABLED") == "$KW_SITE_VHOST" ]] || return 2
-  if cmp -s -- "$KW_SITE_VHOST" <(kw_site_render_vhost "$domain" "$id"); then
+  if kw_site_vhost_matches "$KW_SITE_VHOST" "$domain" "$id" kw_site_render_vhost "$domain" "$id"; then
     KW_SSL_LARAVEL=0
     return 0
   fi
-  if cmp -s -- "$KW_SITE_VHOST" <(kw_laravel_render_vhost http "$domain" "$id"); then
+  if kw_site_vhost_matches "$KW_SITE_VHOST" "$domain" "$id" kw_laravel_render_vhost http "$domain" "$id"; then
     [[ -L $KW_SITE_ROOT/deploy/current ]] || return 2
     target=$(readlink -- "$KW_SITE_ROOT/deploy/current") || return 2
     [[ $target == releases/* && $target != *..* &&
@@ -182,9 +182,11 @@ kw_ssl_issue_locked() (
   temp=$(mktemp /etc/nginx/sites-available/.kwvps-ssl.XXXXXXXX) || return 1
   trap 'if ((swapped == 1 && committed == 0)); then cp -p -- "$backup" "$KW_SITE_VHOST" && kw_nginx_test_restart || kw_log ERROR "Rollback Nginx cần kiểm tra thủ công: $backup"; fi; [[ -z $temp ]] || rm -f -- "$temp"' EXIT
   if (( ${KW_SSL_LARAVEL:-0} )); then
-    kw_laravel_render_vhost "$provider" "$domain" "$id" > "$temp" || return 1
+    kw_laravel_render_vhost "$provider" "$domain" "$id" |
+      kw_cf_realip_render_for_site "$domain" "$id" > "$temp" || return 1
   else
-    kw_ssl_render_vhost "$domain" "$id" "$provider" > "$temp" || return 1
+    kw_ssl_render_vhost "$domain" "$id" "$provider" |
+      kw_cf_realip_render_for_site "$domain" "$id" > "$temp" || return 1
   fi
   chmod 0644 -- "$temp" || return 1
   mv -T -- "$temp" "$KW_SITE_VHOST" || return 1
@@ -291,9 +293,11 @@ kw_ssl_paid_locked() (
   backup=$KW_NGINX_BACKUP
   vhost_temp=$(mktemp /etc/nginx/sites-available/.kwvps-paid.XXXXXXXX) || return 1
   if (( ${KW_SSL_LARAVEL:-0} )); then
-    kw_laravel_render_vhost paid "$domain" "$id" > "$vhost_temp" || return 1
+    kw_laravel_render_vhost paid "$domain" "$id" |
+      kw_cf_realip_render_for_site "$domain" "$id" > "$vhost_temp" || return 1
   else
-    kw_ssl_render_paid_vhost "$domain" "$id" > "$vhost_temp" || return 1
+    kw_ssl_render_paid_vhost "$domain" "$id" |
+      kw_cf_realip_render_for_site "$domain" "$id" > "$vhost_temp" || return 1
   fi
   chmod 0644 -- "$vhost_temp" || return 1
   mv -T -- "$temp" "$target" || return 1

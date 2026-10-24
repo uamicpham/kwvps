@@ -64,6 +64,10 @@ assert test "$output" = ubuntu
 reject kw_os_field ID <(printf 'ID_LIKE=ubuntu\n')
 output=$(bash kwvps --version)
 assert test "$output" = "KwVPS $KW_VERSION"
+if [[ $(uname -s) == Linux && $EUID -ne 0 ]]; then
+  output=$(bash kwvps menu </dev/null 2>&1) && { printf 'UNEXPECTED SUCCESS: unprivileged menu\n' >&2; exit 1; }
+  assert grep -Fq 'sudo kwvps' <<< "$output"
+fi
 output=$(kw_catalog firewall)
 assert grep -Fq 'Bật Firewall UFW|fw-enable' <<< "$output"
 assert grep -Fq 'Tắt Firewall UFW|fw-disable' <<< "$output"
@@ -88,6 +92,7 @@ assert test "$(kw_laravel_tool_label php-cli 8.4)" = 'PHP 8.4 CLI'
 laravel_node_fixture() (
   kw_has() { [[ $1 == node || $1 == npm ]]; }
   node() { printf 'v24.22.1\n'; }
+  npm() { printf '10.0.0\n'; }
   kw_laravel_node_ready
 )
 assert laravel_node_fixture
@@ -110,6 +115,21 @@ laravel_bad_node_origin_fixture() (
   ! kw_laravel_nodesource_candidate
 )
 assert laravel_bad_node_origin_fixture
+laravel_isolated_node_fixture() (
+  KW_LARAVEL_NODE_APT_OPTS=()
+  apt-cache() {
+    case "$1" in
+      policy) printf 'nodejs:\n  Candidate: 24.22.1-1nodesource1\n' ;;
+      madison) printf 'nodejs | 24.22.1-1nodesource1 | https://deb.nodesource.com/node_24.x nodistro/main amd64 Packages\n' ;;
+      show) printf 'Package: nodejs\nVersion: 24.22.1-1nodesource1\nArchitecture: amd64\nSHA256: %064d\n\n' 0 ;;
+      *) return 99 ;;
+    esac
+  }
+  kw_laravel_nodesource_isolated_candidate || return 1
+  [[ $KW_LARAVEL_NODE_CANDIDATE == 24.22.1-1nodesource1 ]] || return 1
+  [[ $(kw_laravel_nodesource_isolated_hash "$KW_LARAVEL_NODE_CANDIDATE") == $(printf '%064d' 0) ]]
+)
+assert laravel_isolated_node_fixture
 output=$(
   kw_laravel_status() { KW_SITE_PHP=8.3; printf 'STATUS\n'; }
   kw_laravel_collect_missing_tools() { KW_LARAVEL_MISSING_TOOLS=(git composer); }
@@ -119,6 +139,14 @@ output=$(
 assert grep -Fq ' 1. Git' <<< "$output"
 assert grep -Fq ' 2. Composer' <<< "$output"
 assert grep -Fq 'SELECTED:composer' <<< "$output"
+output=$(
+  kw_site_prompt_domain() { KW_SITE_CHOICE=example.com; }
+  kw_laravel_layout_ready() { :; }
+  kw_laravel_interactive deploy <<< '0'
+)
+assert grep -Fq '1. Tự nhận từ lockfile (khuyến nghị)' <<< "$output"
+assert grep -Fq '3. Chọn công cụ thủ công (nâng cao)' <<< "$output"
+reject grep -Fq '5. yarn' <<< "$output"
 assert_laravel_apt_cancel_fixture() (
   kw_apt_candidate() { printf '1.0\n'; }
   kw_laravel_ubuntu_candidate_origin() { printf 'http://security.ubuntu.com/ubuntu\n'; }
@@ -137,6 +165,38 @@ for laravel_kind in http zerossl paid; do
   assert grep -Fq 'root /var/www/kwvps/examplecom/deploy/current/public;' <<< "$output"
   assert grep -Fq 'root /var/www/kwvps/examplecom/public;' <<< "$output"
 done
+assert_tunnel_realip_overlay_fixture() (
+  local stage
+  stage=$(mktemp -d) || return 1
+  trap 'rm -f -- "$stage"/*; rmdir -- "$stage"' EXIT
+  kw_site_render_vhost example.com examplecom > "$stage/http"
+  kw_cf_realip_vhost_overlay tunnel example.com examplecom "$stage/http" > "$stage/tunnel" || return 1
+  grep -Fq 'set_real_ip_from 127.0.0.1;' "$stage/tunnel" || return 1
+  grep -Fq 'include /etc/nginx/conf.d/kwvps-cloudflare-realip.conf;' "$stage/tunnel" || return 1
+  kw_site_vhost_matches "$stage/tunnel" example.com examplecom kw_site_render_vhost example.com examplecom || return 1
+  kw_cf_realip_vhost_overlay tunnel example.com examplecom "$stage/tunnel" > "$stage/again" || return 1
+  cmp -s -- "$stage/tunnel" "$stage/again" || return 1
+  kw_cf_realip_vhost_overlay dns example.com examplecom "$stage/tunnel" > "$stage/dns" || return 1
+  cmp -s -- "$stage/http" "$stage/dns" || return 1
+  ! grep -Fq 'set_real_ip_from 127.0.0.1;' "$stage/dns" || return 1
+  kw_tunnel_site_mode() { printf 'tunnel\n'; }
+  kw_cf_realip_public_config_valid() { :; }
+  kw_site_render_vhost example.com examplecom |
+    kw_cf_realip_render_for_site example.com examplecom > "$stage/rendered" || return 1
+  cmp -s -- "$stage/tunnel" "$stage/rendered" || return 1
+  kw_ssl_render_vhost example.com examplecom > "$stage/https"
+  kw_cf_realip_vhost_overlay tunnel example.com examplecom "$stage/https" > "$stage/https-tunnel" || return 1
+  [[ $(grep -Fc 'set_real_ip_from 127.0.0.1;' "$stage/https-tunnel") == 2 ]] || return 1
+  kw_site_vhost_matches "$stage/https-tunnel" example.com examplecom kw_ssl_render_vhost example.com examplecom || return 1
+  kw_laravel_render_vhost letsencrypt example.com examplecom > "$stage/laravel"
+  kw_cf_realip_vhost_overlay tunnel example.com examplecom "$stage/laravel" > "$stage/laravel-tunnel" || return 1
+  KW_SITE_VHOST="$stage/laravel-tunnel"
+  kw_laravel_vhost_kind example.com examplecom || return 1
+  [[ $KW_LARAVEL_VHOST_KIND == letsencrypt && $KW_LARAVEL_FIRST == 0 ]] || return 1
+  printf '  real_ip_header X-Forwarded-For;\n' >> "$stage/https-tunnel"
+  if kw_cf_realip_vhost_overlay tunnel example.com examplecom "$stage/https-tunnel" >/dev/null 2>&1; then return 1; fi
+)
+assert assert_tunnel_realip_overlay_fixture
 output=$(
   temporary_vhost=$(mktemp)
   trap 'rm -f -- "$temporary_vhost"' EXIT

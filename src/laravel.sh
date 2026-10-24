@@ -37,13 +37,83 @@ kw_laravel_layout_ready() {
   done
 }
 
-kw_laravel_node_ready() {
-  local version major minor
+kw_laravel_root_directory_safe() {
+  local path=$1 owner mode
+  [[ -d $path && ! -L $path ]] || return 1
+  owner=$(stat -c %u -- "$path") || return 1
+  mode=$(stat -c %a -- "$path") || return 1
+  [[ $owner == 0 && $mode =~ ^[0-7]{3,4}$ ]] && (( (8#$mode & 0022) == 0 ))
+}
+
+kw_laravel_root_file_safe() {
+  local path=$1 owner mode
+  [[ -f $path && ! -L $path ]] || return 1
+  owner=$(stat -c %u -- "$path") || return 1
+  mode=$(stat -c %a -- "$path") || return 1
+  [[ $owner == 0 && $mode =~ ^[0-7]{3,4}$ ]] && (( (8#$mode & 0022) == 0 ))
+}
+
+kw_laravel_private_node_ready() {
+  local base=/usr/local/lib/kwvps/nodejs release runtime version npm_version
+  kw_laravel_root_directory_safe /usr/local/lib/kwvps || return 1
+  kw_laravel_root_directory_safe "$base" || return 1
+  [[ -L $base/current ]] || return 1
+  release=$(readlink -- "$base/current") || return 1
+  [[ $release =~ ^24\.[0-9]+\.[0-9]+-[0-9A-Za-z.+~_-]+$ && $release != *..* ]] || return 1
+  runtime=$base/$release
+  kw_laravel_root_directory_safe "$runtime" || return 1
+  kw_laravel_root_directory_safe "$runtime/bin" || return 1
+  kw_laravel_root_directory_safe "$runtime/usr" || return 1
+  kw_laravel_root_directory_safe "$runtime/usr/bin" || return 1
+  kw_laravel_root_directory_safe "$runtime/usr/lib" || return 1
+  kw_laravel_root_directory_safe "$runtime/usr/lib/node_modules" || return 1
+  kw_laravel_root_directory_safe "$runtime/usr/lib/node_modules/npm" || return 1
+  kw_laravel_root_directory_safe "$runtime/usr/lib/node_modules/npm/bin" || return 1
+  kw_laravel_root_file_safe "$runtime/usr/bin/node" || return 1
+  kw_laravel_root_file_safe "$runtime/usr/lib/node_modules/npm/bin/npm-cli.js" || return 1
+  [[ -L $runtime/bin/node && $(readlink -- "$runtime/bin/node") == ../usr/bin/node ]] || return 1
+  [[ -L $runtime/bin/npm && $(readlink -- "$runtime/bin/npm") == ../usr/lib/node_modules/npm/bin/npm-cli.js ]] || return 1
+  version=$(env PATH="$runtime/bin:/usr/local/bin:/usr/bin:/bin" "$runtime/bin/node" --version 2>/dev/null) || return 1
+  npm_version=$(env PATH="$runtime/bin:/usr/local/bin:/usr/bin:/bin" "$runtime/bin/npm" --version 2>/dev/null) || return 1
+  [[ $version =~ ^v24\.[0-9]+\.[0-9]+$ && $npm_version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+  KW_LARAVEL_PRIVATE_NODE_BIN=$runtime/bin
+}
+
+kw_laravel_global_node_ready() {
+  local version major minor npm_version
   kw_has node && kw_has npm || return 1
   version=$(node --version 2>/dev/null) || return 1
+  npm_version=$(npm --version 2>/dev/null) || return 1
   [[ $version =~ ^v([0-9]+)\.([0-9]+)\.[0-9]+$ ]] || return 1
   major=${BASH_REMATCH[1]}; minor=${BASH_REMATCH[2]}
+  [[ $npm_version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
   ((major >= 22 && major % 2 == 0 && (major != 22 || minor >= 12)))
+}
+
+kw_laravel_node_ready() {
+  kw_laravel_private_node_ready || kw_laravel_global_node_ready
+}
+
+kw_laravel_frontend_command_ready() {
+  local tool=$1
+  if kw_laravel_private_node_ready; then
+    [[ -x $KW_LARAVEL_PRIVATE_NODE_BIN/$tool ]]
+  else
+    kw_laravel_global_node_ready && kw_has "$tool"
+  fi
+}
+
+kw_laravel_run_frontend() {
+  local owner=$1 command=$2
+  shift 2
+  if kw_laravel_private_node_ready; then
+    runuser -u "$owner" -- env PATH="$KW_LARAVEL_PRIVATE_NODE_BIN:/usr/local/bin:/usr/bin:/bin" "$command" "$@"
+  elif kw_laravel_global_node_ready; then
+    runuser -u "$owner" -- "$command" "$@"
+  else
+    kw_log ERROR 'Node.js/npm phù hợp chưa sẵn sàng; kiểm tra mục Công cụ Laravel.'
+    return 2
+  fi
 }
 
 kw_laravel_tool_ready() {
@@ -51,6 +121,7 @@ kw_laravel_tool_ready() {
   case "$tool" in
     php-cli) kw_has "php$php" ;;
     node-npm) kw_laravel_node_ready ;;
+    pnpm|yarn) kw_laravel_frontend_command_ready "$tool" ;;
     *) kw_has "$tool" ;;
   esac
 }
@@ -59,11 +130,11 @@ kw_laravel_tool_label() {
   local tool=$1 php=$2
   case "$tool" in
     php-cli) printf 'PHP %s CLI' "$php" ;;
-    node-npm) printf 'Node.js/npm (Node >= 22.12, bản chẵn)' ;;
+    node-npm) printf 'Node.js/npm cho build (Node >= 22.12; cài riêng nếu cần)' ;;
     git) printf 'Git' ;; composer) printf 'Composer' ;;
     pnpm) printf 'pnpm (Corepack)' ;; yarn) printf 'Yarn (Corepack)' ;;
     tar) printf 'tar' ;; curl) printf 'curl' ;; nano) printf 'nano' ;;
-    gpg) printf 'GnuPG (để thêm nguồn Node.js)' ;;
+    gpg) printf 'GnuPG (xác minh gói NodeSource riêng)' ;;
     *) return 2 ;;
   esac
 }
@@ -93,6 +164,13 @@ kw_laravel_status() {
       printf '  %s: thiếu hoặc chưa phù hợp\n' "$label"
     fi
   done
+  if kw_laravel_private_node_ready; then
+    printf '  Node build: bản riêng KwVPS (%s); Node/npm toàn VPS không đổi.\n' \
+      "$("$KW_LARAVEL_PRIVATE_NODE_BIN/node" --version)"
+  elif kw_has node; then
+    printf '  Node toàn VPS: %s; nếu quá cũ, chọn cài Node riêng ở danh sách bên dưới.\n' \
+      "$(node --version 2>/dev/null || printf 'không đọc được')"
+  fi
   if [[ ! -d $KW_SITE_ROOT/deploy || ! -d $KW_SITE_ROOT/source ]]; then
     printf '  Cấu trúc: chưa chuẩn bị; dùng mục Chuẩn bị thư mục Laravel.\n'
   fi
@@ -208,7 +286,7 @@ kw_laravel_apt_install_tool() {
 }
 
 kw_laravel_nodesource_source() {
-  printf 'Types: deb\nURIs: https://deb.nodesource.com/node_24.x\nSuites: nodistro\nComponents: main\nSigned-By: /etc/apt/keyrings/kwvps-nodesource.gpg\n'
+  printf 'Types: deb\nURIs: https://deb.nodesource.com/node_24.x\nSuites: nodistro\nComponents: main\nSigned-By: %s\n' "${1:-/etc/apt/keyrings/kwvps-nodesource.gpg}"
 }
 
 kw_laravel_nodesource_fingerprint() {
@@ -289,64 +367,206 @@ kw_laravel_nodesource_repo_add() {
   rm -rf -- "$tmpdir"
 }
 
-kw_laravel_node_install() {
-  local candidate source key repo_added=0
-  source=/etc/apt/sources.list.d/kwvps-nodesource.sources
-  key=/etc/apt/keyrings/kwvps-nodesource.gpg
-  if kw_has node || kw_has npm ||
-     dpkg-query -W nodejs >/dev/null 2>&1 || dpkg-query -W npm >/dev/null 2>&1; then
-    kw_log ERROR 'Node/npm đã có nhưng thiếu hoặc chưa đủ phiên bản. Không tự thay runtime đang dùng bởi website khác; kiểm tra thủ công.'
-    return 2
-  fi
-  if ! { kw_has curl && kw_has gpg; }; then
-    kw_log ERROR 'Cần cài curl và GnuPG từ danh sách công cụ trước khi thêm NodeSource.'
-    return 2
-  fi
-  if [[ -e $source || -L $source || -e $key || -L $key ]]; then
-    kw_laravel_nodesource_repo_check || {
-      kw_log ERROR 'Nguồn NodeSource KwVPS hiện có không khớp mẫu/khóa tin cậy; không ghi đè.'; return 2;
+kw_laravel_nodesource_isolated_candidate() {
+  local listings candidate
+  candidate=$(LC_ALL=C apt-cache "${KW_LARAVEL_NODE_APT_OPTS[@]}" policy nodejs |
+    awk '$1 == "Candidate:" { print $2; exit }') || return 2
+  [[ $candidate =~ ^24\.[0-9]+\.[0-9]+-[0-9A-Za-z.+~_-]+$ && $candidate != *..* ]] || return 2
+  listings=$(LC_ALL=C apt-cache "${KW_LARAVEL_NODE_APT_OPTS[@]}" madison nodejs) || return 2
+  awk -F '|' -v wanted="$candidate" '
+    { version=$2; origin=$3;
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", version);
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", origin);
+      if (version != wanted) next;
+      split(origin, parts, /[[:space:]]+/);
+      if (parts[1] == "https://deb.nodesource.com/node_24.x") trusted=1;
+      else untrusted=1
     }
-  else
-    printf 'Node.js 24 LTS và npm lấy từ APT NodeSource (kho bên thứ ba, chỉ dành Ubuntu 24.04).\n'
-    printf 'KwVPS xác minh fingerprint khóa ký; không chạy script cài tải từ Internet.\n'
-    kw_prompt_yes_no_token 'Thêm nguồn APT NodeSource 24?' 'LARAVEL-NODESOURCE' || return 0
-    kw_laravel_nodesource_repo_add || return 2
-    repo_added=1
-  fi
-  if ! apt-get -o APT::Update::Error-Mode=any update; then
-    if ((repo_added)); then rm -f -- "$source" "$key"; fi
-    kw_log ERROR 'APT update thất bại; đã gỡ nguồn NodeSource vừa thêm (nếu có).'
-    return 1
-  fi
-  if ! kw_laravel_nodesource_candidate; then
-    if ((repo_added)); then rm -f -- "$source" "$key"; fi
-    kw_log ERROR 'APT không có candidate Node.js 24 từ NodeSource; chưa cài.'
-    return 2
-  fi
-  candidate=$KW_LARAVEL_NODE_CANDIDATE
-  if ! kw_laravel_apt_plan nodejs "$candidate"; then
-    if ((repo_added)); then rm -f -- "$source" "$key"; fi
-    return 2
-  fi
-  printf 'Node.js/npm candidate: %s (NodeSource 24).\n' "$candidate"
-  printf '%s\n' "$KW_LARAVEL_APT_PLAN" | awk '/^(Inst|Remv|Conf) / { print }'
-  if ! kw_prompt_yes_no_token 'Cài Node.js 24 và npm trên toàn VPS?' 'LARAVEL-NODE24'; then
-    if ((repo_added)); then rm -f -- "$source" "$key"; fi
-    return 0
-  fi
-  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-remove --no-install-recommends "nodejs=$candidate" || return 1
-  kw_laravel_node_ready || {
-    kw_log ERROR 'APT đã cài Node.js nhưng node/npm chưa đạt yêu cầu; kiểm tra thủ công.'; return 1;
-  }
-  printf 'Đã cài Node.js %s và npm.\n' "$(node --version)"
+    END { if (!trusted || untrusted) exit 1 }
+  ' <<< "$listings" || return 2
+  KW_LARAVEL_NODE_CANDIDATE=$candidate
 }
 
+kw_laravel_nodesource_isolated_hash() {
+  local candidate=$1 records
+  records=$(LC_ALL=C apt-cache "${KW_LARAVEL_NODE_APT_OPTS[@]}" show "nodejs=$candidate") || return 2
+  awk -v wanted="$candidate" '
+    BEGIN { RS=""; FS="\n" }
+    { version=""; arch=""; hash="";
+      for (i=1; i<=NF; i++) {
+        if ($i ~ /^Version: /) version=substr($i, 10);
+        if ($i ~ /^Architecture: /) arch=substr($i, 15);
+        if ($i ~ /^SHA256: /) hash=substr($i, 9)
+      }
+      if (version != wanted || arch != "amd64") next;
+      if (length(hash) != 64 || hash !~ /^[0-9a-f]+$/) bad=1;
+      else if (expected != "" && expected != hash) bad=1;
+      else expected=hash
+    }
+    END { if (bad || expected == "") exit 1; print expected }
+  ' <<< "$records"
+}
+
+kw_laravel_node_extract_private() (
+  local archive=$1 candidate=$2 owner=$3 base=/usr/local/lib/kwvps/nodejs stage='' runtime tmp_link
+  # runuser inherits cwd; the menu may have been launched from /root (0700).
+  cd -- / || return 1
+  runtime=$base/$candidate
+  kw_laravel_root_directory_safe /usr/local/lib/kwvps || return 2
+  if [[ ! -e $base && ! -L $base ]]; then
+    install -d -m 0755 -o root -g root -- "$base" || return 1
+  fi
+  kw_laravel_root_directory_safe "$base" || {
+    kw_log ERROR 'Thư mục Node riêng có owner/quyền không an toàn; chưa cài.'; return 2;
+  }
+  [[ ! -e $runtime && ! -L $runtime ]] || {
+    kw_log ERROR 'Phiên bản Node riêng đã tồn tại; không ghi đè.'; return 2;
+  }
+  [[ ! -e $base/current || -L $base/current ]] || {
+    kw_log ERROR 'Đường dẫn Node riêng đã tồn tại bất thường; không ghi đè.'; return 2;
+  }
+  stage=$(mktemp -d "$base/.stage.XXXXXXXX") || return 1
+  trap 'if [[ -n $stage && -d $stage ]]; then rm -rf -- "$stage"; fi' EXIT
+  dpkg-deb -x -- "$archive" "$stage" || return 1
+  kw_laravel_root_directory_safe "$stage/usr" || return 2
+  kw_laravel_root_directory_safe "$stage/usr/bin" || return 2
+  kw_laravel_root_directory_safe "$stage/usr/lib" || return 2
+  kw_laravel_root_directory_safe "$stage/usr/lib/node_modules" || return 2
+  kw_laravel_root_directory_safe "$stage/usr/lib/node_modules/npm" || return 2
+  kw_laravel_root_directory_safe "$stage/usr/lib/node_modules/npm/bin" || return 2
+  kw_laravel_root_file_safe "$stage/usr/bin/node" || return 2
+  kw_laravel_root_file_safe "$stage/usr/lib/node_modules/npm/bin/npm-cli.js" || return 2
+  install -d -m 0755 -o root -g root -- "$stage/bin" || return 1
+  ln -s ../usr/bin/node "$stage/bin/node" || return 1
+  ln -s ../usr/lib/node_modules/npm/bin/npm-cli.js "$stage/bin/npm" || return 1
+  chmod 0755 -- "$stage" || return 1
+  if ! runuser -u "$owner" -- env PATH="$stage/bin:/usr/local/bin:/usr/bin:/bin" node --version |
+       grep -Eq '^v24\.[0-9]+\.[0-9]+$' ||
+     ! runuser -u "$owner" -- env PATH="$stage/bin:/usr/local/bin:/usr/bin:/bin" npm --version |
+       grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+    kw_log ERROR 'Gói NodeSource không chạy được dưới user site; chưa kích hoạt.'
+    return 2
+  fi
+  mv -T -- "$stage" "$runtime" || return 1
+  stage=''
+  tmp_link=$base/.current.$$
+  [[ ! -e $tmp_link && ! -L $tmp_link ]] || return 2
+  ln -s "$candidate" "$tmp_link" || return 1
+  if ! mv -Tf -- "$tmp_link" "$base/current"; then
+    rm -f -- "$tmp_link"
+    return 1
+  fi
+  kw_laravel_private_node_ready || {
+    kw_log ERROR 'Node riêng đã giải nén nhưng chưa đạt kiểm tra an toàn; chưa thể build.'; return 2;
+  }
+)
+
+kw_laravel_node_install() (
+  local candidate key fingerprint tmpdir expected actual owner=${1:-}
+  local -a packages
+  [[ -n $owner ]] || return 2
+  if ! { kw_has curl && kw_has gpg && kw_has dpkg-deb && kw_has sha256sum; }; then
+    kw_log ERROR 'Cần curl, GnuPG, dpkg-deb và sha256sum để cài Node riêng.'
+    return 2
+  fi
+  if [[ -e /usr/local/lib/kwvps || -L /usr/local/lib/kwvps ]]; then
+    kw_laravel_root_directory_safe /usr/local/lib/kwvps || {
+      kw_log ERROR '/usr/local/lib/kwvps không an toàn; chưa cài Node riêng.'; return 2;
+    }
+  else
+    install -d -m 0755 -o root -g root -- /usr/local/lib/kwvps || return 1
+  fi
+  if [[ -e /usr/local/lib/kwvps/nodejs || -L /usr/local/lib/kwvps/nodejs ]]; then
+    kw_laravel_root_directory_safe /usr/local/lib/kwvps/nodejs || {
+      kw_log ERROR 'Thư mục Node riêng không an toàn; chưa cài.'; return 2;
+    }
+  fi
+  tmpdir=$(mktemp -d /tmp/kwvps-node24.XXXXXXXX) || return 1
+  trap 'rm -rf -- "$tmpdir"' EXIT
+  chmod 0755 -- "$tmpdir" || return 1
+  key=$tmpdir/nodesource.asc
+  curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 \
+    --connect-timeout 10 --max-time 30 --max-filesize 1048576 \
+    -o "$key" 'https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key' || return 1
+  fingerprint=$(kw_laravel_nodesource_fingerprint "$key") || return 2
+  [[ $fingerprint == 6F71F525282841EEDAF851B42F59B5F99B1BE0B4 ]] || {
+    kw_log ERROR 'Fingerprint NodeSource không khớp; chưa cài.'; return 2;
+  }
+  gpg --batch --yes --dearmor -o "$tmpdir/nodesource.gpg" "$key" || return 1
+  chmod 0644 -- "$tmpdir/nodesource.gpg" || return 1
+  kw_laravel_nodesource_source "$tmpdir/nodesource.gpg" > "$tmpdir/nodesource.sources" || return 1
+  chmod 0644 -- "$tmpdir/nodesource.sources" || return 1
+  install -d -m 0755 -- "$tmpdir/lists" "$tmpdir/archives" || return 1
+  KW_LARAVEL_NODE_APT_OPTS=(
+    -o "Dir::Etc::sourcelist=$tmpdir/nodesource.sources"
+    -o 'Dir::Etc::sourceparts=-'
+    -o "Dir::State::lists=$tmpdir/lists"
+    -o 'Dir::State::status=/dev/null'
+    -o "Dir::Cache::archives=$tmpdir/archives"
+  )
+  apt-get "${KW_LARAVEL_NODE_APT_OPTS[@]}" -o APT::Update::Error-Mode=any update || {
+    kw_log ERROR 'APT không xác minh được kho NodeSource riêng; không đổi APT toàn VPS.'; return 2;
+  }
+  kw_laravel_nodesource_isolated_candidate || {
+    kw_log ERROR 'Không tìm được Node.js 24 amd64 từ NodeSource.'; return 2;
+  }
+  candidate=$KW_LARAVEL_NODE_CANDIDATE
+  expected=$(kw_laravel_nodesource_isolated_hash "$candidate") || {
+    kw_log ERROR 'Không đọc được SHA-256 từ chỉ mục APT đã ký.'; return 2;
+  }
+  printf 'Node.js/npm hiện tại toàn VPS: '
+  if kw_has node; then node --version 2>/dev/null || printf 'không đọc được\n'; else printf 'chưa có\n'; fi
+  printf 'NodeSource candidate: %s. Sẽ giải nén riêng vào /usr/local/lib/kwvps/nodejs.\n' "$candidate"
+  printf 'Không thay node/npm toàn VPS, không đổi PATH chung và không cài package hệ thống.\n'
+  kw_prompt_yes_no_token 'Cài Node.js 24 riêng cho build Laravel của KwVPS?' 'LARAVEL-NODE24-PRIVATE' || return 0
+  (
+    cd -- "$tmpdir" || exit 1
+    apt-get "${KW_LARAVEL_NODE_APT_OPTS[@]}" download "nodejs=$candidate"
+  ) || return 1
+  packages=("$tmpdir"/nodejs_*.deb)
+  [[ ${#packages[@]} -eq 1 && -f ${packages[0]} && ! -L ${packages[0]} ]] || {
+    kw_log ERROR 'APT không tải đúng một gói nodejs; chưa cài.'; return 2;
+  }
+  actual=$(sha256sum -- "${packages[0]}") || return 1
+  [[ ${actual%% *} == "$expected" ]] || {
+    kw_log ERROR 'SHA-256 gói NodeSource không khớp chỉ mục APT đã ký; chưa cài.'; return 2;
+  }
+  kw_laravel_node_extract_private "${packages[0]}" "$candidate" "$owner" || return $?
+  printf 'Đã cài Node.js 24 riêng cho KwVPS; Node toàn VPS vẫn giữ nguyên.\n'
+)
+
 kw_laravel_frontend_install() {
-  local tool=$1 version
+  local tool=$1 version runtime bin
   [[ $tool == pnpm || $tool == yarn ]] || return 2
   kw_laravel_node_ready || {
     kw_log ERROR 'Cần Node.js/npm phù hợp trước khi kích hoạt pnpm/Yarn.'; return 2;
   }
+  if kw_laravel_private_node_ready; then
+    bin=$KW_LARAVEL_PRIVATE_NODE_BIN
+    runtime=${bin%/bin}
+    [[ ! -e $bin/$tool && ! -L $bin/$tool ]] || {
+      kw_log ERROR "Node riêng đã có $tool; không ghi đè."; return 2;
+    }
+    if [[ ! -x $bin/corepack ]]; then
+      version=$(env PATH="$bin:/usr/local/bin:/usr/bin:/bin" "$bin/npm" \
+        --registry=https://registry.npmjs.org view corepack dist-tags.latest 2>/dev/null) || return 1
+      [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+        kw_log ERROR 'Không xác minh được phiên bản Corepack từ npmjs.org.'; return 2;
+      }
+      printf 'Cài corepack@%s chỉ vào Node riêng của KwVPS; không đổi npm toàn VPS.\n' "$version"
+      kw_prompt_yes_no_token 'Cài Corepack riêng cho KwVPS?' 'LARAVEL-COREPACK-PRIVATE' || return 0
+      env PATH="$bin:/usr/local/bin:/usr/bin:/bin" "$bin/npm" \
+        --registry=https://registry.npmjs.org install --global --prefix "$runtime" \
+        --ignore-scripts --no-audit --no-fund "corepack@$version" || return 1
+      [[ -x $bin/corepack ]] || return 1
+    fi
+    printf 'Corepack sẽ tạo shim %s chỉ trong Node riêng; không đổi /usr/local/bin.\n' "$tool"
+    kw_prompt_yes_no_token "Kích hoạt $tool trong Node riêng?" "LARAVEL-COREPACK-PRIVATE:$tool" || return 0
+    env PATH="$bin:/usr/local/bin:/usr/bin:/bin" "$bin/corepack" enable --install-directory "$bin" "$tool" || return 1
+    [[ -x $bin/$tool ]] || return 1
+    printf 'Đã kích hoạt %s trong Node riêng.\n' "$tool"
+    return 0
+  fi
   [[ ! -e /usr/local/bin/$tool && ! -L /usr/local/bin/$tool ]] || {
     kw_log ERROR "/usr/local/bin/$tool đã có; không ghi đè."; return 2;
   }
@@ -382,7 +602,7 @@ kw_laravel_install_tool_locked() {
   fi
   case "$tool" in
     git|composer|php-cli|tar|curl|nano|gpg) kw_laravel_apt_install_tool "$tool" "$php" ;;
-    node-npm) kw_laravel_node_install ;;
+    node-npm) kw_laravel_node_install "$KW_SITE_OWNER" ;;
     pnpm|yarn) kw_laravel_frontend_install "$tool" ;;
     *) return 2 ;;
   esac
@@ -690,12 +910,12 @@ kw_laravel_render_vhost() {
 kw_laravel_vhost_kind() {
   local domain=$1 id=$2 kind
   for kind in http letsencrypt zerossl paid; do
-    if cmp -s -- "$KW_SITE_VHOST" <(kw_laravel_vhost_template "$kind" "$domain" "$id"); then
+    if kw_site_vhost_matches "$KW_SITE_VHOST" "$domain" "$id" kw_laravel_vhost_template "$kind" "$domain" "$id"; then
       KW_LARAVEL_VHOST_KIND=$kind
       KW_LARAVEL_FIRST=1
       return 0
     fi
-    if cmp -s -- "$KW_SITE_VHOST" <(kw_laravel_render_vhost "$kind" "$domain" "$id"); then
+    if kw_site_vhost_matches "$KW_SITE_VHOST" "$domain" "$id" kw_laravel_render_vhost "$kind" "$domain" "$id"; then
       KW_LARAVEL_VHOST_KIND=$kind
       KW_LARAVEL_FIRST=0
       return 0
@@ -725,6 +945,8 @@ kw_laravel_health() {
 kw_laravel_deploy_locked() (
   local domain=$1 frontend=${2:-auto} id source deploy releases shared owner php commit short stamp stage='' release='' archive='' changes command lock_count=0 \
     current next='' previous='' kind first vhost_backup='' vhost_temp='' activated=0 success=0
+  # All paths below are absolute. Site-user commands must not inherit /root.
+  cd -- / || return 1
   kw_laravel_frontend_valid "$frontend" || return 2
   kw_laravel_layout_ready "$domain" && kw_laravel_git_source || return 2
   kw_nginx_ready || return 2
@@ -808,23 +1030,26 @@ kw_laravel_deploy_locked() (
     none)
       [[ ! -f $stage/package.json ]] || printf 'Bỏ qua frontend theo lựa chọn; cần bảo đảm assets đã có trong public/.\n' ;;
     npm)
-      if ! { [[ -f $stage/package.json && -f $stage/package-lock.json && ! -L $stage/package-lock.json ]] && kw_has npm; }; then
+      if ! { [[ -f $stage/package.json && -f $stage/package-lock.json && ! -L $stage/package-lock.json ]] &&
+             kw_laravel_frontend_command_ready npm; }; then
         kw_log ERROR 'Cần package.json, package-lock.json và npm.'; return 2;
       fi
-      runuser -u "$owner" -- npm ci --prefix "$stage" || return 1
-      runuser -u "$owner" -- npm run build --prefix "$stage" || return 1 ;;
+      kw_laravel_run_frontend "$owner" npm ci --prefix "$stage" || return 1
+      kw_laravel_run_frontend "$owner" npm run build --prefix "$stage" || return 1 ;;
     pnpm)
-      if ! { [[ -f $stage/package.json && -f $stage/pnpm-lock.yaml && ! -L $stage/pnpm-lock.yaml ]] && kw_has pnpm; }; then
+      if ! { [[ -f $stage/package.json && -f $stage/pnpm-lock.yaml && ! -L $stage/pnpm-lock.yaml ]] &&
+             kw_laravel_frontend_command_ready pnpm; }; then
         kw_log ERROR 'Cần package.json, pnpm-lock.yaml và pnpm.'; return 2;
       fi
-      runuser -u "$owner" -- pnpm --dir "$stage" install --frozen-lockfile || return 1
-      runuser -u "$owner" -- pnpm --dir "$stage" run build || return 1 ;;
+      kw_laravel_run_frontend "$owner" pnpm --dir "$stage" install --frozen-lockfile || return 1
+      kw_laravel_run_frontend "$owner" pnpm --dir "$stage" run build || return 1 ;;
     yarn)
-      if ! { [[ -f $stage/package.json && -f $stage/yarn.lock && ! -L $stage/yarn.lock ]] && kw_has yarn; }; then
+      if ! { [[ -f $stage/package.json && -f $stage/yarn.lock && ! -L $stage/yarn.lock ]] &&
+             kw_laravel_frontend_command_ready yarn; }; then
         kw_log ERROR 'Cần package.json, yarn.lock và yarn.'; return 2;
       fi
-      runuser -u "$owner" -- yarn --cwd "$stage" install --frozen-lockfile || return 1
-      runuser -u "$owner" -- yarn --cwd "$stage" build || return 1 ;;
+      kw_laravel_run_frontend "$owner" yarn --cwd "$stage" install --frozen-lockfile || return 1
+      kw_laravel_run_frontend "$owner" yarn --cwd "$stage" build || return 1 ;;
   esac
   [[ -z $(find -P "$stage/public" -type l ! -path "$stage/public/storage" -print -quit) ]] || {
     kw_log ERROR 'Build tạo symlink trong public/; không kích hoạt để tránh lộ file riêng.'; return 2;
@@ -846,7 +1071,8 @@ kw_laravel_deploy_locked() (
     kw_nginx_backup_file "$KW_SITE_VHOST" "laravel-$id" || return 1
     vhost_backup=$KW_NGINX_BACKUP
     vhost_temp=$(mktemp /etc/nginx/sites-available/.kwvps-laravel.XXXXXXXX) || return 1
-    kw_laravel_render_vhost "$kind" "$domain" "$id" > "$vhost_temp" || return 1
+    kw_laravel_render_vhost "$kind" "$domain" "$id" |
+      kw_cf_realip_render_for_site "$domain" "$id" > "$vhost_temp" || return 1
     chmod 0644 -- "$vhost_temp" || return 1
   fi
   trap 'if ((activated && ! success)); then if [[ -n $previous ]]; then ln -sfn -- "$previous" "$next" && mv -Tf -- "$next" "$current" || kw_log ERROR "Không thể quay lại release cũ: $current"; else rm -f -- "$current" || kw_log ERROR "Không thể bỏ current: $current"; fi; if [[ -n $vhost_backup ]]; then install -m 0644 -o root -g root -- "$vhost_backup" "$KW_SITE_VHOST" || kw_log ERROR "Cần phục hồi vhost từ $vhost_backup"; fi; kw_nginx_test_restart || kw_log ERROR "Cần kiểm tra Nginx sau rollback: $domain"; fi; [[ -z $vhost_temp ]] || rm -f -- "$vhost_temp"; [[ -z $next ]] || rm -f -- "$next"' EXIT
@@ -931,16 +1157,23 @@ kw_laravel_interactive() {
       kw_laravel_with_lock env "$domain" ;;
     deploy)
       printf 'Build frontend cho %s:\n' "$domain"
-      printf '  1. Tự nhận từ lockfile (npm/pnpm/yarn)\n'
-      printf '  2. Bỏ qua; assets đã có sẵn\n  3. npm\n  4. pnpm\n  5. yarn\n  0. Quay lại\n'
+      printf '  1. Tự nhận từ lockfile (khuyến nghị)\n'
+      printf '  2. Bỏ qua; assets đã có sẵn\n  3. Chọn công cụ thủ công (nâng cao)\n  0. Quay lại\n'
       while :; do
         printf 'Chọn: '
         IFS= read -r choice || return 0
         case "$choice" in
           1) frontend=auto; break ;; 2) frontend=none; break ;;
-          3) frontend=npm; break ;; 4) frontend=pnpm; break ;;
-          5) frontend=yarn; break ;; 0) return 0 ;;
-          *) printf 'Chọn số 0–5.\n' ;;
+          3)
+            printf '  1. npm\n  2. pnpm\n  3. yarn\n  0. Quay lại\nChọn: '
+            IFS= read -r choice || return 0
+            case "$choice" in
+              1) frontend=npm; break ;; 2) frontend=pnpm; break ;;
+              3) frontend=yarn; break ;; 0) return 0 ;;
+              *) printf 'Chọn số 0–3.\n' ;;
+            esac ;;
+          0) return 0 ;;
+          *) printf 'Chọn số 0–3.\n' ;;
         esac
       done
       printf 'Deploy %s: chạy Composer và %s (nếu chọn), kích hoạt release mới, kiểm tra Nginx/HTTP.\n' "$domain" "$frontend"

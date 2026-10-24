@@ -152,18 +152,19 @@ kw_cache_map_ready() {
 }
 
 kw_cache_base_vhost() {
-  local domain=$1 id=$2 vhost=$3
+  local domain=$1 id=$2 vhost=$3 base
   kw_domain_valid "$domain" && kw_site_id_valid "$id" || return 2
   [[ -f $vhost && ! -L $vhost ]] || return 2
   if grep -Fxq '# KwVPS TLS: Paid' "$vhost"; then
-    kw_ssl_render_paid_vhost "$domain" "$id"
+    base=$(kw_ssl_render_paid_vhost "$domain" "$id") || return 2
   elif grep -Fxq '# KwVPS TLS: ZeroSSL' "$vhost"; then
-    kw_ssl_render_vhost "$domain" "$id" zerossl
+    base=$(kw_ssl_render_vhost "$domain" "$id" zerossl) || return 2
   elif grep -Fxq "# KwVPS TLS: Let's Encrypt" "$vhost"; then
-    kw_ssl_render_vhost "$domain" "$id" letsencrypt
+    base=$(kw_ssl_render_vhost "$domain" "$id" letsencrypt) || return 2
   else
-    kw_site_render_vhost "$domain" "$id"
+    base=$(kw_site_render_vhost "$domain" "$id") || return 2
   fi
+  printf '%s\n' "$base" | kw_cf_realip_render_for_site "$domain" "$id"
 }
 
 kw_cache_render_vhost() {
