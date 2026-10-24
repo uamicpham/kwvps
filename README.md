@@ -14,7 +14,7 @@ Deploy yêu cầu Git, PHP CLI đúng phiên bản site và Composer; frontend c
 
 ## Trạng thái
 
-Mã nguồn phiên bản `0.50.14`; kiểm tra [GitHub Releases](https://github.com/uamicpham/kwvps/releases) để biết bản đã công bố. API token Cloudflare dùng riêng theo site; backup cấu hình domain có thể kèm token mã hóa bằng mật khẩu. Xem [ghi chú 0.50.14](docs/RELEASE-NOTES-0.50.14.md) và [bảng trạng thái](docs/TRANG-THAI-CHUC-NANG.md).
+Mã nguồn phiên bản `0.50.15`; kiểm tra [GitHub Releases](https://github.com/uamicpham/kwvps/releases) để biết bản đã công bố. API token Cloudflare dùng riêng theo site; backup cấu hình domain có thể kèm token mã hóa bằng mật khẩu. Xem [ghi chú 0.50.15](docs/RELEASE-NOTES-0.50.15.md) và [bảng trạng thái](docs/TRANG-THAI-CHUC-NANG.md).
 
 Quản lý Sites có tạo, đổi tên miền HTTP nguyên bản, clone source/code, xóa với hai lựa chọn giữ vùng phục hồi/xóa sạch và phân lại quyền. Menu Backup có phục hồi hoặc xóa sạch gói site đã giữ. Tunnel/route thật đã được thử trên VPS lab; đổi tên site không tự cập nhật DNS/route Cloudflare hoặc URL ứng dụng. Các thao tác không xóa dùng xác nhận `y/N`; xóa yêu cầu gõ lại đối tượng. **Không cài đè lên VPS LarVPS, web stack có sẵn hoặc máy chứa website/dữ liệu.**
 

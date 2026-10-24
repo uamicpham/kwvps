@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 # Constrained package updates for services already managed by KwVPS.
 
+kw_version_newer() {
+  local target=${1:-} installed=${2:-}
+  [[ $target =~ ^[0-9]+\.[0-9]+\.[0-9]+(-dev)?$ &&
+     $installed =~ ^[0-9]+\.[0-9]+\.[0-9]+(-dev)?$ ]] || return 2
+  # In Debian versions, "-dev" is a package revision and sorts after the
+  # matching stable version. Treat our development suffix as a prerelease.
+  dpkg --compare-versions "${target/-dev/~dev}" gt "${installed/-dev/~dev}"
+}
+
 kw_update_apt_refresh() {
   ((EUID == 0)) || { kw_log ERROR 'Cần root để làm mới danh mục APT.'; return 2; }
   kw_os_supported '' || return 2
@@ -293,7 +302,7 @@ kw_update_kwvps_github() (
   version=$KW_GITHUB_RELEASE_VERSION
   current=$(/opt/kwvps/kwvps --version) || return 2
   current=${current#KwVPS }
-  if ! dpkg --compare-versions "$version" gt "$current"; then
+  if ! kw_version_newer "$version" "$current"; then
     printf 'Bản đang cài: %s | GitHub mới nhất: %s. Không có bản mới hơn.\n' "$current" "$version"
     return 0
   fi

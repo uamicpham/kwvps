@@ -73,6 +73,19 @@ setup() {
   [ "$KW_UPDATE_BUNDLE" = /root/kwvps-update ]
 }
 
+@test "stable release upgrades the matching development build" {
+  run kw_version_newer 0.50.15 0.50.15-dev
+  [ "$status" -eq 0 ]
+  run kw_version_newer 0.50.15 0.50.14-dev
+  [ "$status" -eq 0 ]
+  run kw_version_newer 0.50.15-dev 0.50.15
+  [ "$status" -ne 0 ]
+  run kw_version_newer 0.50.15 0.50.15
+  [ "$status" -ne 0 ]
+  run kw_version_newer '0.50.15;id' 0.50.14
+  [ "$status" -eq 2 ]
+}
+
 @test "GitHub repository accepts only an owner and repository name" {
   run kw_github_repo_valid owner/kwvps
   [ "$status" -eq 0 ]

@@ -68,7 +68,7 @@ upgrade_check() {
   installed_version=${installed_version#KwVPS }
   [[ $installed_version =~ ^[0-9]+\.[0-9]+\.[0-9]+(-dev)?$ &&
      $KW_VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+(-dev)?$ ]] || return 2
-  if ! dpkg --compare-versions "$KW_VERSION" gt "$installed_version"; then
+  if ! kw_version_newer "$KW_VERSION" "$installed_version"; then
     kw_log ERROR "Gói $KW_VERSION không mới hơn bản đã cài $installed_version; từ chối hạ/cài lại bằng luồng nâng cấp."
     return 2
   fi
