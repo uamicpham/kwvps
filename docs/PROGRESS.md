@@ -1,5 +1,12 @@
 # Tiến độ KwVPS
 
+## 0.50.12 — 24/10/2026
+
+- Cải thiện kiểm tra và thông báo lỗi cho menu Cập nhật Cloudflare Real IP: kiểm tra quyền root ngay khi vào menu tương tác, cảnh báo chạy `sudo kwvps`.
+- Ghi log chi tiết cho từng tiền kiểm tra thất bại: OS không hỗ trợ, thiếu install-id, thiếu công cụ hệ thống, thư mục nginx conf.d hoặc module Nginx realip.
+- Hiển thị trực tiếp lỗi cú pháp Nginx nếu có thay vì nuốt vào `/dev/null`; thông báo rõ khi Nginx chưa active.
+- Tự động tạo thư mục `/var/backups/kwvps` quyền 0700 trước khi sao lưu file cấu hình Real IP cũ.
+
 ## 0.50.11 — 24/10/2026
 
 - Sửa deploy Laravel chạy từ thư mục `/` trước khi hạ quyền sang user site; tránh lỗi `find` khi menu được gọi từ `/root`. `deploy/current` chỉ xuất hiện sau khi Composer/frontend/quyền file hoàn tất, ngay trước bước đổi vhost và health check. Menu build còn hai lựa chọn thường dùng (tự nhận/bỏ qua); npm, pnpm, yarn nằm dưới mục nâng cao.

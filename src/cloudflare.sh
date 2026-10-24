@@ -260,14 +260,35 @@ kw_cf_realip_apply() (
   local KW_CF_STAGE='' KW_CF_CANDIDATE=''
   local -a KW_CF_SITE_CANDIDATES=() KW_CF_SITE_TARGETS=() KW_CF_SITE_OLD=() KW_CF_SITE_BACKUPS=()
   [[ $confirm == UPDATE-CLOUDFLARE-REALIP ]] || return 2
-  ((EUID == 0)) || return 2
-  kw_os_supported '' || return 2
-  [[ -f /etc/kwvps/install-id && ! -L /etc/kwvps/install-id && $(< /etc/kwvps/install-id) == kwvps-v1 ]] || return 2
-  for cmd in curl python3 nginx systemctl flock mktemp; do kw_has "$cmd" || return 2; done
-  [[ -d /etc/nginx/conf.d && ! -L /etc/nginx/conf.d ]] || return 2
-  [[ ! -L $kw_cf_realip_target ]] || return 2
-  nginx -V 2>&1 | grep -Fq -- '--with-http_realip_module' || return 2
-  nginx -t >/dev/null 2>&1 && systemctl is-active --quiet nginx || return 2
+  ((EUID == 0)) || { kw_log ERROR 'Cần sudo/root để cập nhật Cloudflare Real IP.'; return 2; }
+  kw_os_supported '' || { kw_log ERROR 'Chỉ hỗ trợ Ubuntu 24.04.'; return 2; }
+  [[ -f /etc/kwvps/install-id && ! -L /etc/kwvps/install-id && $(< /etc/kwvps/install-id) == kwvps-v1 ]] || {
+    kw_log ERROR 'Không tìm thấy bản cài KwVPS hợp lệ (/etc/kwvps/install-id).'
+    return 2
+  }
+  for cmd in curl python3 nginx systemctl flock mktemp; do
+    kw_has "$cmd" || { kw_log ERROR "Thiếu công cụ bắt buộc: $cmd."; return 2; }
+  done
+  [[ -d /etc/nginx/conf.d && ! -L /etc/nginx/conf.d ]] || {
+    kw_log ERROR 'Thư mục /etc/nginx/conf.d không tồn tại hoặc là symlink.'
+    return 2
+  }
+  [[ ! -L $kw_cf_realip_target ]] || {
+    kw_log ERROR "File $kw_cf_realip_target không được là symlink."
+    return 2
+  }
+  nginx -V 2>&1 | grep -Fq -- '--with-http_realip_module' || {
+    kw_log ERROR 'Nginx thiếu module http_realip_module.'
+    return 2
+  }
+  nginx -t || {
+    kw_log ERROR 'Cấu hình Nginx hiện tại có lỗi; kiểm tra lại cú pháp trước.'
+    return 2
+  }
+  systemctl is-active --quiet nginx || {
+    kw_log ERROR 'Dịch vụ Nginx hiện không active; cần khởi động Nginx trước.'
+    return 2
+  }
   # Match the sites -> nginx -> cloudflare lock order used by domain rename.
   exec 9>/run/lock/kwvps-sites.lock || return 2
   flock -n 9 || return 1
@@ -301,6 +322,9 @@ kw_cf_realip_apply() (
     return 0
   fi
   if [[ -f $kw_cf_realip_target ]]; then
+    if [[ ! -e $KW_BACKUP_ROOT && ! -L $KW_BACKUP_ROOT ]]; then
+      install -d -m 0700 -o root -g root -- "$KW_BACKUP_ROOT" || return 1
+    fi
     kw_backup_dir_safe "$KW_BACKUP_ROOT" 0077 || return 2
     stamp=$(date -u +%Y%m%dT%H%M%SZ) || return 1
     backup="$KW_BACKUP_ROOT/cf-realip-${stamp}-${BASHPID}.conf"
@@ -331,6 +355,7 @@ kw_cf_realip_apply() (
 )
 
 kw_cf_realip_interactive() {
+  ((EUID == 0)) || { kw_log ERROR 'Cần sudo/root để cập nhật Cloudflare Real IP.'; return 2; }
   kw_cf_realip_plan
   kw_prompt_yes_no_token 'Cập nhật Cloudflare Real IP?' UPDATE-CLOUDFLARE-REALIP || return 0
   kw_cf_realip_apply "$KW_PROMPT_VALUE"
