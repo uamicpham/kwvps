@@ -31,6 +31,6 @@ Site mới dùng ID là tên domain viết thường, bỏ dấu chấm và dấ
 
 ## Cập nhật 24/10/2026 (mã local, chưa triển khai VPS)
 
-- Tunnel là chế độ theo từng site (`tunnel` hoặc `dns`); site mới mặc định được ghi nhãn `dns`. Site cũ chưa phân loại vẫn ở trạng thái `unknown` khi cloudflared chạy để chặn Nginx local limit/bridge IP an toàn. Tunnel token hiện dùng chung cho một `cloudflared.service` trên VPS; route hostname và chế độ ingress được chọn riêng từng site.
+- Tunnel là chế độ theo từng site (`tunnel` hoặc `dns`); site mới mặc định được ghi nhãn `dns`. Site cũ chưa phân loại vẫn ở trạng thái `unknown` khi connector đang chạy để chặn Nginx local limit/bridge IP an toàn. Mã local hiện hỗ trợ token và service riêng theo site, đồng thời giữ `cloudflared.service` chung cũ để không ngắt route đang dùng. Khi người dùng xác nhận bật Tunnel, Real IP thiếu sẽ được cập nhật trước, sau đó áp vhost theo site. Chưa triển khai bản sửa này trên VPS.
 - Bridge log Nginx → Cloudflare IP Access rule đã có mã và timer, mặc định tắt; chưa kiểm thử API ghi/xóa rule trên VPS.
 - Backup cấu hình vẫn là bản hẹp (metadata/pool/vhost và, từ 0.50.6, Zone ID/token site mã hóa nếu có), **không** phải gói chuyển VPS. Chưa chứa source, chứng chỉ/khóa, rate limit, cron hoặc route Cloudflare. Đổi tên miền chỉ hỗ trợ HTTP mẫu; từ chối site có trạng thái ingress/rate/Zone ID/token để tránh bỏ sót cấu hình.

@@ -1068,6 +1068,9 @@ kw_site_remove_plan() {
   if [[ -e /etc/kwvps/ingress/$domain.mode || -L /etc/kwvps/ingress/$domain.mode ]]; then
     printf '  Nhãn DNS/Tunnel: /etc/kwvps/ingress/%s.mode\n' "$domain"
   fi
+  if kw_tunnel_site_connector_present "$domain"; then
+    printf '  Tunnel: connector/token riêng còn tồn tại; chuyển route và gỡ ở menu Tunnel trước.\n'
+  fi
   if [[ -f /etc/letsencrypt/renewal/$domain.conf ]]; then
     printf '  SSL/renewal: %s (chứng chỉ sẽ giữ nguyên)\n' "/etc/letsencrypt/renewal/$domain.conf"
   fi
@@ -1104,6 +1107,10 @@ kw_site_remove_preflight() {
   id=${KW_SITE_OWNER#kw}
   php=${KW_SITE_POOL#/etc/php/}; php=${php%%/*}
   KW_REMOVE_PHP=$php
+  if kw_tunnel_site_connector_present "$domain"; then
+    kw_log ERROR 'Site còn connector/token Tunnel riêng. Chuyển route sang DNS, chọn DNS trong menu Tunnel rồi gỡ connector trước khi xóa site.'
+    return 2
+  fi
   KW_REMOVE_INGRESS="/etc/kwvps/ingress/$domain.mode"
   if [[ -e /etc/kwvps/ingress || -L /etc/kwvps/ingress ]]; then
     [[ -d /etc/kwvps/ingress && ! -L /etc/kwvps/ingress &&

@@ -146,7 +146,7 @@ kw_action() {
     nginx-log) kw_journal nginx ;;
     db-log) kw_journal mariadb ;;
     logs-cleanup) kw_logs_cleanup_interactive ;;
-    tunnel-log) kw_journal cloudflared ;;
+    tunnel-log) kw_tunnel_log_interactive ;;
     tunnel-status) kw_tunnel_status ;;
     tunnel-config) kw_tunnel_config_interactive ;;
     tunnel-restart) kw_tunnel_restart_interactive ;;

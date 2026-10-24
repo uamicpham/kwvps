@@ -4,6 +4,7 @@ setup() {
   cd "$BATS_TEST_DIRNAME/.."
   source src/core.sh
   source src/system.sh
+  source src/sites.sh
   source src/firewall.sh
   source src/tunnel.sh
 }
@@ -38,6 +39,53 @@ setup() {
   [ "$status" -eq 0 ]
   [[ "$output" == *'--token-file /etc/kwvps/cloudflare/tunnel-token'* ]]
   [[ "$output" != *'--token ey'* ]]
+}
+
+@test "site connector uses a separate token and service" {
+  run kw_tunnel_render_site_unit examplecom
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'kwvps-cloudflared-examplecom.service'* ||
+     "$output" == *'Cloudflare Tunnel (KwVPS site examplecom)'* ]]
+  [[ "$output" == *'--token-file /etc/kwvps/cloudflare/tunnels/examplecom.token'* ]]
+  [[ "$output" != *'/etc/kwvps/cloudflare/tunnel-token'* ]]
+}
+
+@test "site connector rejects a missing or mismatched confirmation" {
+  run kw_tunnel_site_configure example.com 'eyJhIjoiMDEyMzQ1Njc4OWFiY2RlZiIsInQiOiJ0ZXN0In0=' WRONG
+  [ "$status" -eq 2 ]
+  run kw_tunnel_site_remove example.com wrong.example.com
+  [ "$status" -eq 2 ]
+}
+
+@test "site connector takes precedence over the legacy shared connector" {
+  kw_tunnel_site_connector_present() { return 0; }
+  kw_tunnel_site_service_owned() { return 0; }
+  kw_tunnel_site_token_safe() { return 0; }
+  systemctl() { [[ $1 == is-active && $2 == --quiet && $3 == kwvps-cloudflared-examplecom.service ]]; }
+  run kw_tunnel_connector_active_for_site example.com
+  [ "$status" -eq 0 ]
+}
+
+@test "connector selection uses numbered site and legacy entries" {
+  kw_tunnel_collect_connectors() {
+    KW_TUNNEL_CONNECTOR_UNITS=(kwvps-cloudflared-examplecom.service cloudflared.service)
+    KW_TUNNEL_CONNECTOR_LABELS=(example.com 'Connector chung cũ')
+  }
+  choose_second() { kw_tunnel_choose_connector <<< '2'; printf '%s\n' "$KW_TUNNEL_CHOICE_UNIT"; }
+  run choose_second
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'2. Connector chung cũ'* ]]
+  [[ "$output" == *'cloudflared.service' ]]
+}
+
+@test "inbound close recognizes an active site connector without a shared service" {
+  kw_tunnel_collect_connectors() {
+    KW_TUNNEL_CONNECTOR_UNITS=(kwvps-cloudflared-examplecom.service)
+    KW_TUNNEL_CONNECTOR_LABELS=(example.com)
+  }
+  systemctl() { [[ $1 == is-active && $2 == --quiet && $3 == kwvps-cloudflared-examplecom.service ]]; }
+  run kw_tunnel_any_active
+  [ "$status" -eq 0 ]
 }
 
 @test "Tunnel menu exposes installer when cloudflared is absent" {
@@ -160,5 +208,22 @@ setup() {
   run kw_tunnel_post_config_interactive
   [ "$status" -eq 0 ]
   [[ "$output" == *'PROMPT:Bật chế độ Tunnel và Real IP cho example.com?'* ]]
+  [[ "$output" == *'SET:example.com:tunnel:INGRESS:example.com:tunnel'* ]]
+}
+
+@test "accepting Tunnel setup repairs missing Cloudflare Real IP" {
+  kw_cf_realip_public_config_valid() { [[ ${REALIP_READY:-0} == 1 ]]; }
+  kw_cf_realip_apply() { [[ $1 == UPDATE-CLOUDFLARE-REALIP ]] || return 2; REALIP_READY=1; }
+  run kw_tunnel_ensure_realip
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'đang cập nhật dải IP Cloudflare'* ]]
+}
+
+@test "already marked Tunnel offers Real IP repair after yes" {
+  kw_tunnel_site_mode() { printf 'tunnel\n'; }
+  kw_prompt_yes_no_token() { KW_PROMPT_VALUE=$2; }
+  kw_tunnel_site_mode_set() { printf 'SET:%s:%s:%s\n' "$1" "$2" "$3"; }
+  run kw_tunnel_post_config_interactive example.com
+  [ "$status" -eq 0 ]
   [[ "$output" == *'SET:example.com:tunnel:INGRESS:example.com:tunnel'* ]]
 }

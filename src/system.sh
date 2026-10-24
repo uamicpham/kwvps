@@ -303,35 +303,53 @@ kw_logs_cleanup_interactive() {
 }
 
 kw_tunnel_status() {
-  kw_service_status cloudflared || return 1
-  printf 'Trạng thái service không chứng minh hostname công khai hoạt động.\n'
+  kw_tunnel_status_all
 }
 
 kw_tunnel_restart() (
-  local confirm=${1:-}
-  [[ $confirm == RESTART-CLOUDFLARED ]] || return 2
+  local confirm=${1:-} unit=${2:-} listed found=0
+  [[ -n $unit && $confirm == "RESTART-TUNNEL:$unit" ]] || return 2
   ((EUID == 0)) || { kw_log ERROR 'Cần root để restart Cloudflare Tunnel.'; return 2; }
   kw_os_supported '' || return 2
   [[ -f /etc/kwvps/install-id && ! -L /etc/kwvps/install-id && \
      $(< /etc/kwvps/install-id) == kwvps-v1 ]] || return 2
-  kw_has cloudflared && kw_has systemctl && kw_has flock || return 2
-  systemctl cat cloudflared.service >/dev/null 2>&1 || {
-    kw_log ERROR 'Không tìm thấy service cloudflared.'; return 2;
-  }
-  systemctl is-active --quiet cloudflared.service || {
+  kw_has systemctl && kw_has flock || return 2
+  kw_tunnel_collect_connectors || return 2
+  for listed in "${KW_TUNNEL_CONNECTOR_UNITS[@]}"; do
+    [[ $listed != "$unit" ]] || found=1
+  done
+  ((found)) || { kw_log ERROR 'Connector không thuộc danh sách KwVPS.'; return 2; }
+  systemctl is-active --quiet "$unit" || {
     kw_log ERROR 'Tunnel chưa active; cần kiểm tra cấu hình trước khi restart.'; return 2;
   }
   exec 9>/run/lock/kwvps-tunnel.lock || return 2
   flock -n 9 || return 1
-  systemctl restart cloudflared.service || return 1
-  systemctl is-active --quiet cloudflared.service || {
+  kw_tunnel_collect_connectors || return 2
+  found=0
+  for listed in "${KW_TUNNEL_CONNECTOR_UNITS[@]}"; do
+    [[ $listed != "$unit" ]] || found=1
+  done
+  ((found)) || return 2
+  systemctl restart "$unit" || return 1
+  systemctl is-active --quiet "$unit" || {
     kw_log ERROR 'Tunnel không active sau restart; xem journal Cloudflared.'; return 1;
   }
-  printf 'Cloudflared đã restart và service active. Kiểm tra hostname công khai riêng.\n'
+  printf '%s đã restart và active. Kiểm tra hostname công khai riêng.\n' "$unit"
 )
 
 kw_tunnel_restart_interactive() {
-  printf 'Restart Cloudflared có thể ngắt truy cập qua Tunnel trong thời gian ngắn.\n'
-  kw_prompt_yes_no_token 'Restart Cloudflared?' RESTART-CLOUDFLARED || return 0
-  kw_tunnel_restart "$KW_PROMPT_VALUE"
+  local unit label status
+  kw_tunnel_choose_connector || { status=$?; ((status == 1)) && return 0; return "$status"; }
+  unit=$KW_TUNNEL_CHOICE_UNIT; label=$KW_TUNNEL_CHOICE_LABEL
+  printf 'Restart connector có thể ngắt truy cập qua Tunnel trong thời gian ngắn.\n'
+  kw_prompt_yes_no_token "Restart Tunnel của $label?" "RESTART-TUNNEL:$unit" || return 0
+  kw_tunnel_restart "$KW_PROMPT_VALUE" "$unit"
+}
+
+kw_tunnel_log_interactive() {
+  local unit label status
+  kw_tunnel_choose_connector || { status=$?; ((status == 1)) && return 0; return "$status"; }
+  unit=$KW_TUNNEL_CHOICE_UNIT; label=$KW_TUNNEL_CHOICE_LABEL
+  printf '100 dòng log gần nhất của %s; che dữ liệu riêng trước khi chia sẻ.\n' "$label"
+  kw_read_command journalctl --no-pager -n 100 -u "$unit"
 }

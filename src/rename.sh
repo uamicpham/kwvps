@@ -40,9 +40,17 @@ kw_site_rename_preflight() {
   kw_site_lookup "$old" || return 2
   old_id=${KW_SITE_OWNER#kw}; old_owner=$KW_SITE_OWNER; old_root=$KW_SITE_ROOT
   old_pool=$KW_SITE_POOL; old_vhost=$KW_SITE_VHOST; old_meta=$KW_SITE_META; old_link=$KW_SITE_ENABLED; php=$KW_SITE_PHP
+  if kw_tunnel_site_connector_present "$old"; then
+    kw_log ERROR 'Site còn connector/token Tunnel riêng. Chuyển route sang DNS, chọn DNS trong menu Tunnel rồi gỡ connector trước khi đổi tên.'
+    return 2
+  fi
   kw_site_new_domain_valid "$new" && [[ $old != "$new" ]] || return 2
   new_id=$(kw_site_id "$new") || return 2
   [[ $new_id != "$old_id" ]] || return 2
+  if kw_tunnel_site_connector_present "$new"; then
+    kw_log ERROR 'Domain đích còn connector/token Tunnel; từ chối ghi đè.'
+    return 2
+  fi
   # A rename cannot leave the old hostname in external Cloudflare rules,
   # tunnel routes, local rate states or independent backup references.
   digest=$(printf '%s' "$old" | sha256sum) || return 2
