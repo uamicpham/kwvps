@@ -186,6 +186,26 @@ kw_fw_port_has_action() {
   return 1
 }
 
+# UFW prints IPv4 and IPv6 as separate rows. A single matching row does not
+# prove that inbound traffic is blocked on both address families.
+kw_fw_port_has_action_family() {
+  local port=$1 proto=$2 action=$3 family=$4 status line target
+  kw_port_valid "$port" && kw_fw_proto_valid "$proto" || return 2
+  [[ $action == ALLOW || $action == DENY ]] && [[ $family == 4 || $family == 6 ]] || return 2
+  status=$(LC_ALL=C ufw status numbered) || return 2
+  while IFS= read -r line; do
+    [[ $line =~ ^\[[[:space:]]*[0-9]+\][[:space:]]+([^[:space:]]+) ]] || continue
+    target=${BASH_REMATCH[1]}
+    [[ $target == "$port/$proto" ]] || continue
+    [[ $line == *" $action IN "* ]] || continue
+    if [[ $family == 4 && $line != *'(v6)'* ]] ||
+       [[ $family == 6 && $line == *'(v6)'* ]]; then
+      return 0
+    fi
+  done <<< "$status"
+  return 1
+}
+
 kw_fw_port_plan() {
   local verb=$1 port=$2 proto=$3
   [[ $verb == open || $verb == close ]] || return 2

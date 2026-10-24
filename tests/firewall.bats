@@ -56,6 +56,20 @@ setup() {
   [ "$status" -eq 1 ]
 }
 
+@test "UFW action coverage distinguishes IPv4 and IPv6" {
+  ufw() {
+    printf 'Status: active\n'
+    printf '[ 1] 80/tcp DENY IN Anywhere # kwvps-port-deny-80-tcp\n'
+    printf '[ 2] 80/tcp (v6) DENY IN Anywhere (v6) # kwvps-port-deny-80-tcp\n'
+    printf '[ 3] 443/tcp DENY IN Anywhere # kwvps-port-deny-443-tcp\n'
+  }
+  kw_fw_port_has_action_family 80 tcp DENY 4
+  kw_fw_port_has_action_family 80 tcp DENY 6
+  kw_fw_port_has_action_family 443 tcp DENY 4
+  ! kw_fw_port_has_action_family 443 tcp DENY 6
+  ! kw_fw_port_has_action_family 80 tcp ALLOW 4
+}
+
 @test "SSH guard collects configured and current SSH ports" {
   kw_has() { return 0; }
   sshd() { printf 'port 22\nport 2222\n'; }

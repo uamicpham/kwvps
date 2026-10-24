@@ -417,6 +417,12 @@ kw_tunnel_inbound_rollback() {
   kw_log WARN 'Thao tác inbound chưa hoàn tất; đã thử hoàn tác các rule mới.'
 }
 
+kw_tunnel_inbound_denied() {
+  local port=$1
+  kw_fw_port_has_action_family "$port" tcp DENY 4 &&
+    kw_fw_port_has_action_family "$port" tcp DENY 6
+}
+
 kw_tunnel_inbound_change() (
   local action=$1 renewals='' port state line number ssh_ports ssh_port inbound_committed=0 was_inactive=0 removed_attempted=0
   local -a created_ports=() removed_ports=() numbers=()
@@ -453,15 +459,26 @@ kw_tunnel_inbound_change() (
   if [[ $action == close ]]; then
     for port in 80 443; do
       mapfile -t numbers < <(kw_fw_rule_numbers port-deny "$port" tcp)
-      ((${#numbers[@]} > 0)) && continue
-      ufw insert 1 deny "$port/tcp" comment "kwvps-port-deny-$port-tcp" >/dev/null 2>&1 ||
-        ufw deny "$port/tcp" comment "kwvps-port-deny-$port-tcp" >/dev/null 2>&1 || true
+      if ((${#numbers[@]} > 0)); then
+        kw_tunnel_inbound_denied "$port" && continue
+        kw_log ERROR "Rule DENY $port/tcp có sẵn nhưng chưa chặn đủ IPv4/IPv6; kiểm tra UFW thủ công."
+        return 2
+      fi
+      # Record before invoking UFW: a command may add one family then fail.
       created_ports+=("$port")
+      if ! ufw insert 1 deny "$port/tcp" comment "kwvps-port-deny-$port-tcp"; then
+        kw_log WARN "UFW không chèn được DENY $port/tcp ở đầu; thử thêm rule thường."
+        ufw deny "$port/tcp" comment "kwvps-port-deny-$port-tcp" || {
+          kw_log ERROR "UFW từ chối tạo DENY $port/tcp; xem lỗi UFW ngay phía trên."
+          return 1
+        }
+      fi
     done
     for port in 80 443; do
-      mapfile -t numbers < <(kw_fw_rule_numbers port-deny "$port" tcp)
-      ((${#numbers[@]} > 0)) || kw_fw_port_has_action "$port" tcp DENY || {
-        kw_log ERROR "Không xác minh được DENY $port/tcp."; return 1;
+      kw_tunnel_inbound_denied "$port" || {
+        kw_log ERROR "Không xác minh được DENY $port/tcp cho cả IPv4 và IPv6; trạng thái UFW hiện tại:"
+        LC_ALL=C ufw status numbered >&2 || true
+        return 1
       }
     done
     if [[ -n $renewals ]]; then

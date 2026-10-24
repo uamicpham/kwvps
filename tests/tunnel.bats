@@ -4,6 +4,7 @@ setup() {
   cd "$BATS_TEST_DIRNAME/.."
   source src/core.sh
   source src/system.sh
+  source src/firewall.sh
   source src/tunnel.sh
 }
 
@@ -56,6 +57,18 @@ setup() {
 @test "Tunnel inbound rejects unsupported action without changing firewall" {
   run kw_tunnel_inbound_change wrong
   [ "$status" -eq 2 ]
+}
+
+@test "Tunnel inbound verification requires both address families" {
+  ufw() {
+    printf 'Status: active\n'
+    printf '[ 1] 80/tcp DENY IN Anywhere # kwvps-port-deny-80-tcp\n'
+    [[ ${UFW_HAS_V6:-0} == 1 ]] &&
+      printf '[ 2] 80/tcp (v6) DENY IN Anywhere (v6) # kwvps-port-deny-80-tcp\n'
+    return 0
+  }
+  ! kw_tunnel_inbound_denied 80
+  UFW_HAS_V6=1 kw_tunnel_inbound_denied 80
 }
 @test "ingress mode defaults to DNS and rejects unsafe names" {
   kw_tunnel_site_mode_path() {
