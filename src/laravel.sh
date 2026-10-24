@@ -379,7 +379,7 @@ kw_laravel_nodesource_isolated_candidate() {
       gsub(/^[[:space:]]+|[[:space:]]+$/, "", origin);
       if (version != wanted) next;
       split(origin, parts, /[[:space:]]+/);
-      if (parts[1] == "https://deb.nodesource.com/node_24.x") trusted=1;
+      if (parts[1] ~ /^https:\/\/deb\.nodesource\.com\/node_24\.x\/?$/) trusted=1;
       else untrusted=1
     }
     END { if (!trusted || untrusted) exit 1 }
@@ -496,13 +496,15 @@ kw_laravel_node_install() (
   chmod 0644 -- "$tmpdir/nodesource.gpg" || return 1
   kw_laravel_nodesource_source "$tmpdir/nodesource.gpg" > "$tmpdir/nodesource.sources" || return 1
   chmod 0644 -- "$tmpdir/nodesource.sources" || return 1
-  install -d -m 0755 -- "$tmpdir/lists" "$tmpdir/archives" || return 1
+  install -d -m 0755 -- "$tmpdir/lists/partial" "$tmpdir/archives/partial" || return 1
   KW_LARAVEL_NODE_APT_OPTS=(
     -o "Dir::Etc::sourcelist=$tmpdir/nodesource.sources"
     -o 'Dir::Etc::sourceparts=-'
     -o "Dir::State::lists=$tmpdir/lists"
     -o 'Dir::State::status=/dev/null'
     -o "Dir::Cache::archives=$tmpdir/archives"
+    -o 'Dir::Cache::pkgcache='
+    -o 'Dir::Cache::srcpkgcache='
   )
   apt-get "${KW_LARAVEL_NODE_APT_OPTS[@]}" -o APT::Update::Error-Mode=any update || {
     kw_log ERROR 'APT không xác minh được kho NodeSource riêng; không đổi APT toàn VPS.'; return 2;
