@@ -14,6 +14,7 @@
   - Bảo vệ SSH thông minh khi kích hoạt UFW (`kw_fw_ssh_ports`): tự động đọc cổng lắng nghe từ socket systemd (`systemctl show ssh.socket -p Listen`) kết hợp với cấu hình `sshd_config`; không còn từ chối bật UFW trên Ubuntu 24.04 khi chạy lệnh qua `sudo` làm mất biến `$SSH_CONNECTION`.
   - Cơ chế dự phòng khi bảng rule UFW trống: tự động chuyển từ `ufw insert 1` sang `ufw allow` / `ufw deny` thông thường, loại bỏ triệt để lỗi `ERROR: Invalid position '1'`.
   - Menu Inbound 80/443 hiển thị thông báo rõ ràng cho người dùng khi UFW đang tắt trước khi yêu cầu xác nhận `y/N`.
+  - Menu Tunnel và Firewall gỡ rule ALLOW 80/443 hoặc cổng được chọn nếu do KwVPS tạo trước khi thêm DENY; từ chối ALLOW ngoài KwVPS, xác minh IPv4/IPv6 và thử phục hồi rule cũ khi thất bại.
   - Smoke test cục bộ nâng lên 628/628 checks đạt PASS.
 
 ## 0.50.12 — 24/10/2026
