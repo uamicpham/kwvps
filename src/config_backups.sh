@@ -402,6 +402,7 @@ kw_config_restore_locked() (
   if [[ -f $stage/new.custom ]]; then
     if [[ -e $KW_SITE_CUSTOM || -L $KW_SITE_CUSTOM ]]; then
       kw_nginx_custom_file_safe "$KW_SITE_CUSTOM" || return 2
+      # shellcheck disable=SC2034 # EXIT rollback trap reads this marker.
       custom_existed=1
       install -m 0600 -o root -g root -- "$KW_SITE_CUSTOM" "$stage/old.custom" || return 1
       cmp -s -- "$KW_SITE_CUSTOM" "$stage/new.custom" || custom_changed=1
@@ -434,6 +435,7 @@ kw_config_restore_locked() (
       [[ -d $KW_SITE_CUSTOM_DIR && ! -L $KW_SITE_CUSTOM_DIR &&
          $(stat -c %u:%a -- "$KW_SITE_CUSTOM_DIR") == 0:755 ]] || return 2
     install -d -m 0755 -o root -g root -- /etc/nginx/kwvps-custom "$KW_SITE_CUSTOM_DIR" || return 1
+    # shellcheck disable=SC2034 # EXIT rollback trap reads this marker.
     custom_applied=1
     install -m 0644 -o root -g root -- "$stage/new.custom" "$KW_SITE_CUSTOM" || return 1
   fi

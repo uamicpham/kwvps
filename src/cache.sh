@@ -180,7 +180,7 @@ kw_cache_render_vhost() {
 }
 
 kw_cache_state() {
-  local domain=${1,,} id base expected
+  local domain=${1,,} id base
   kw_site_lookup "$domain" || return 2
   id=${KW_SITE_OWNER#kw}
   kw_cache_paths "$id" || return 2
@@ -196,7 +196,6 @@ kw_cache_state() {
     fi
     KW_CACHE_STATE=off
   else
-    expected=$(kw_cache_render_vhost "$domain" "$id" "$KW_SITE_VHOST") || return 2
     kw_site_vhost_matches "$KW_SITE_VHOST" "$domain" "$id" kw_cache_render_vhost "$domain" "$id" "$KW_SITE_VHOST" || {
       kw_log ERROR 'Vhost tùy biến; không sửa FastCGI cache tự động.'
       return 2

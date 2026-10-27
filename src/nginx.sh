@@ -327,12 +327,14 @@ kw_nginx_vhost_custom_locked() (
     chmod 0644 -- "$vhost_temp" || return 1
     mv -T -- "$vhost_temp" "$vhost" || return 1
     vhost_temp=''
+    # shellcheck disable=SC2034 # EXIT rollback trap reads this marker.
     swapped=1
   fi
   chown -- root:root "$temp" || return 1
   chmod 0644 -- "$temp" || return 1
   mv -T -- "$temp" "$KW_SITE_CUSTOM" || return 1
   temp=''
+  # shellcheck disable=SC2034 # EXIT rollback trap reads this marker.
   custom_swapped=1
   kw_nginx_test_restart || return 1
   # shellcheck disable=SC2034 # Read by the EXIT rollback trap.
