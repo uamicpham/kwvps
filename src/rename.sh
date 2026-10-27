@@ -75,10 +75,10 @@ kw_site_rename_preflight() {
     return 2
   fi
   if kw_tunnel_site_connector_present "$old"; then
-    kw_tunnel_site_service_owned "$old" && kw_tunnel_site_token_safe "$old" || {
+    if ! kw_tunnel_site_service_owned "$old" || ! kw_tunnel_site_token_safe "$old"; then
       kw_log ERROR 'Connector/token Tunnel của site cũ không còn đúng mẫu hoặc quyền an toàn; chưa đổi tên.'
       return 2
-    }
+    fi
     kw_tunnel_site_paths "$old" || return 2
     [[ $(systemctl show -p FragmentPath --value "$KW_TUNNEL_SITE_UNIT_NAME") == "$KW_TUNNEL_SITE_UNIT" &&
        -z $(systemctl show -p DropInPaths --value "$KW_TUNNEL_SITE_UNIT_NAME") ]] || {
@@ -334,9 +334,13 @@ kw_site_rename_locked() (
   local KW_RENAME_NEW_RATE="/etc/kwvps/cloudflare/antiddos/$new.rate"
   # shellcheck disable=SC2034 # Tunnel migration/rollback helpers read these state markers.
   local KW_RENAME_TUNNEL_PRESENT=0 KW_RENAME_TUNNEL_TOUCHED=0
+  # shellcheck disable=SC2034 # Tunnel migration/rollback helpers read prior systemd state.
   local KW_RENAME_TUNNEL_WAS_ACTIVE=0 KW_RENAME_TUNNEL_WAS_ENABLED=0
+  # shellcheck disable=SC2034 # Tunnel migration/rollback helpers read connector paths.
   local KW_RENAME_OLD_TUNNEL_UNIT='' KW_RENAME_NEW_TUNNEL_UNIT=''
+  # shellcheck disable=SC2034 # Tunnel migration/rollback helpers read connector paths.
   local KW_RENAME_OLD_TUNNEL_TOKEN='' KW_RENAME_NEW_TUNNEL_TOKEN=''
+  # shellcheck disable=SC2034 # Tunnel migration/rollback helpers read service names.
   local KW_RENAME_OLD_TUNNEL_SERVICE='' KW_RENAME_NEW_TUNNEL_SERVICE=''
   kw_site_rename_preflight "$old" "$new" || return 2
   kw_site_lookup "$old" || return 2
@@ -351,6 +355,7 @@ kw_site_rename_locked() (
   KW_RENAME_NEW_POOL=$KW_SITE_POOL; KW_RENAME_NEW_VHOST=$KW_SITE_VHOST
   KW_RENAME_NEW_META=$KW_SITE_META; KW_RENAME_NEW_LINK=$KW_SITE_ENABLED
   if kw_tunnel_site_connector_present "$old"; then
+    # shellcheck disable=SC2034 # Read by the migration/rollback helpers.
     KW_RENAME_TUNNEL_PRESENT=1
     kw_tunnel_site_paths "$old" || return 2
     KW_RENAME_OLD_TUNNEL_UNIT=$KW_TUNNEL_SITE_UNIT
@@ -360,7 +365,9 @@ kw_site_rename_locked() (
     KW_RENAME_NEW_TUNNEL_UNIT=$KW_TUNNEL_SITE_UNIT
     KW_RENAME_NEW_TUNNEL_TOKEN=$KW_TUNNEL_SITE_TOKEN
     KW_RENAME_NEW_TUNNEL_SERVICE=$KW_TUNNEL_SITE_UNIT_NAME
+    # shellcheck disable=SC2034 # Read by the migration/rollback helpers.
     systemctl is-active --quiet "$KW_RENAME_OLD_TUNNEL_SERVICE" && KW_RENAME_TUNNEL_WAS_ACTIVE=1
+    # shellcheck disable=SC2034 # Read by the migration/rollback helpers.
     systemctl is-enabled --quiet "$KW_RENAME_OLD_TUNNEL_SERVICE" && KW_RENAME_TUNNEL_WAS_ENABLED=1
   fi
   if [[ ! -e $KW_BACKUP_ROOT && ! -L $KW_BACKUP_ROOT ]]; then
