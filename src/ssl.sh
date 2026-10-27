@@ -74,6 +74,7 @@ server {
   ssl_protocols TLSv1.2 TLSv1.3;
   access_log /var/log/nginx/kwvps-${id}.access.log;
   error_log /var/log/nginx/kwvps-${id}.error.log;
+  include /etc/nginx/kwvps-custom/${id}/*.conf;
   location / { try_files \$uri \$uri/ /index.php?\$args; }
   location ^~ /.well-known/acme-challenge/ {
     default_type text/plain;

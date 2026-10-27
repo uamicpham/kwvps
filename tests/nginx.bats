@@ -38,6 +38,19 @@ setup() {
   [ "$status" -eq 1 ]
 }
 
+@test "custom snippet accepts server settings but rejects managed identity and includes" {
+  file="$BATS_TEST_TMPDIR/custom.conf"
+  printf '%s\n' 'client_max_body_size 64m;' 'location = /health { return 200; }' > "$file"
+  run kw_nginx_custom_directives_safe "$file"
+  [ "$status" -eq 0 ]
+  printf '%s\n' 'server_name' 'other.example.com;' >> "$file"
+  run kw_nginx_custom_directives_safe "$file"
+  [ "$status" -eq 1 ]
+  printf '%s\n' 'include /etc/nginx/other.conf;' > "$file"
+  run kw_nginx_custom_directives_safe "$file"
+  [ "$status" -eq 1 ]
+}
+
 @test "Nginx apply tests config, restarts, then checks active state" {
   nginx() { printf 'test\n' >> "$BATS_TEST_TMPDIR/events"; }
   systemctl() { printf '%s\n' "$*" >> "$BATS_TEST_TMPDIR/events"; }

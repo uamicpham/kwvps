@@ -65,9 +65,26 @@ kw_site_rename_preflight() {
   kw_site_lookup "$old" || return 2
   old_id=${KW_SITE_OWNER#kw}; old_owner=$KW_SITE_OWNER; old_root=$KW_SITE_ROOT
   old_pool=$KW_SITE_POOL; old_vhost=$KW_SITE_VHOST; old_meta=$KW_SITE_META; old_link=$KW_SITE_ENABLED; php=$KW_SITE_PHP
+  [[ ! -e /etc/nginx/kwvps-custom && ! -L /etc/nginx/kwvps-custom ]] ||
+    [[ -d /etc/nginx/kwvps-custom && ! -L /etc/nginx/kwvps-custom &&
+       $(stat -c %u:%a -- /etc/nginx/kwvps-custom) == 0:755 ]] || return 2
+  if [[ -e $KW_SITE_CUSTOM_DIR || -L $KW_SITE_CUSTOM_DIR ]]; then
+    [[ -d $KW_SITE_CUSTOM_DIR && ! -L $KW_SITE_CUSTOM_DIR &&
+       $(stat -c %u:%a -- "$KW_SITE_CUSTOM_DIR") == 0:755 ]] || return 2
+    for file in "$KW_SITE_CUSTOM_DIR"/*; do
+      [[ -e $file || -L $file ]] || continue
+      [[ $file == "$KW_SITE_CUSTOM" ]] && kw_nginx_custom_file_safe "$file" &&
+        kw_nginx_custom_directives_safe "$file" || return 2
+      if grep -Fq -- "$old" "$file" || grep -Fq -- "$old_id" "$file"; then
+        kw_log ERROR "Snippet Nginx còn tham chiếu domain/site ID cũ: $file. Hãy sửa trước khi đổi tên."
+        return 2
+      fi
+    done
+  fi
   kw_site_new_domain_valid "$new" && [[ $old != "$new" ]] || return 2
   new_id=$(kw_site_id "$new") || return 2
   [[ $new_id != "$old_id" ]] || return 2
+  [[ ! -e /etc/nginx/kwvps-custom/$new_id && ! -L /etc/nginx/kwvps-custom/$new_id ]] || return 2
   kw_tunnel_site_paths "$new" || return 2
   if kw_tunnel_site_connector_present "$new" ||
      systemctl cat "$KW_TUNNEL_SITE_UNIT_NAME" >/dev/null 2>&1; then
@@ -253,6 +270,13 @@ kw_site_rename_tunnel_rollback() {
 kw_site_rename_rollback() {
   ((KW_RENAME_DONE == 0)) || return 0
   local file name
+  if [[ -d $KW_RENAME_NEW_CUSTOM_DIR && ! -L $KW_RENAME_NEW_CUSTOM_DIR ]]; then
+    rm -f -- "$KW_RENAME_NEW_CUSTOM_DIR/custom.conf"
+    rmdir -- "$KW_RENAME_NEW_CUSTOM_DIR" || kw_log ERROR 'Cần gỡ snippet Nginx mới sau rollback.'
+  fi
+  if [[ -d $KW_RENAME_STAGE/custom-dir && ! -e $KW_RENAME_OLD_CUSTOM_DIR ]]; then
+    mv -T -- "$KW_RENAME_STAGE/custom-dir" "$KW_RENAME_OLD_CUSTOM_DIR" || kw_log ERROR 'Cần trả snippet Nginx cũ.'
+  fi
   if [[ -f $KW_RENAME_STAGE/local-rate && ! -L $KW_RENAME_STAGE/local-rate ]]; then
     [[ ! -e $KW_RENAME_NEW_RATE && ! -L $KW_RENAME_NEW_RATE ]] || rm -f -- "$KW_RENAME_NEW_RATE"
     install -m 0600 -o root -g root -- "$KW_RENAME_STAGE/local-rate" "$KW_RENAME_OLD_RATE" ||
@@ -328,6 +352,7 @@ kw_site_rename_locked() (
   local KW_RENAME_OLD_ROOT='' KW_RENAME_NEW_ROOT='' KW_RENAME_OLD_POOL='' KW_RENAME_NEW_POOL=''
   local KW_RENAME_OLD_VHOST='' KW_RENAME_NEW_VHOST='' KW_RENAME_OLD_META='' KW_RENAME_NEW_META=''
   local KW_RENAME_OLD_LINK='' KW_RENAME_NEW_LINK='' KW_RENAME_PHP=''
+  local KW_RENAME_OLD_CUSTOM_DIR='' KW_RENAME_NEW_CUSTOM_DIR=''
   local KW_RENAME_OLD_INGRESS="/etc/kwvps/ingress/$old.mode"
   local KW_RENAME_NEW_INGRESS="/etc/kwvps/ingress/$new.mode"
   local KW_RENAME_OLD_RATE="/etc/kwvps/cloudflare/antiddos/$old.rate"
@@ -349,11 +374,13 @@ kw_site_rename_locked() (
   KW_RENAME_OLD_OWNER=$KW_SITE_OWNER; KW_RENAME_OLD_ROOT=$KW_SITE_ROOT
   KW_RENAME_OLD_POOL=$KW_SITE_POOL; KW_RENAME_OLD_VHOST=$KW_SITE_VHOST
   KW_RENAME_OLD_META=$KW_SITE_META; KW_RENAME_OLD_LINK=$KW_SITE_ENABLED
+  KW_RENAME_OLD_CUSTOM_DIR=$KW_SITE_CUSTOM_DIR
   new_id=$(kw_site_id "$new") || return 2
   kw_site_paths "$new_id" "$KW_RENAME_PHP"
   KW_RENAME_NEW_OWNER=$KW_SITE_OWNER; KW_RENAME_NEW_ROOT=$KW_SITE_ROOT
   KW_RENAME_NEW_POOL=$KW_SITE_POOL; KW_RENAME_NEW_VHOST=$KW_SITE_VHOST
   KW_RENAME_NEW_META=$KW_SITE_META; KW_RENAME_NEW_LINK=$KW_SITE_ENABLED
+  KW_RENAME_NEW_CUSTOM_DIR=$KW_SITE_CUSTOM_DIR
   if kw_tunnel_site_connector_present "$old"; then
     # shellcheck disable=SC2034 # Read by the migration/rollback helpers.
     KW_RENAME_TUNNEL_PRESENT=1
@@ -411,6 +438,9 @@ kw_site_rename_locked() (
   KW_RENAME_NGINX_CHANGED=1
   mv -T -- "$KW_RENAME_OLD_LINK" "$KW_RENAME_STAGE/link" || return 1
   mv -T -- "$KW_RENAME_OLD_VHOST" "$KW_RENAME_STAGE/vhost" || return 1
+  if [[ -d $KW_RENAME_OLD_CUSTOM_DIR ]]; then
+    mv -T -- "$KW_RENAME_OLD_CUSTOM_DIR" "$KW_RENAME_STAGE/custom-dir" || return 1
+  fi
   # shellcheck disable=SC2034 # Rollback must restore service state even after a partial move.
   KW_RENAME_FPM_CHANGED=1
   mv -T -- "$KW_RENAME_OLD_POOL" "$KW_RENAME_STAGE/pool" || return 1
@@ -433,6 +463,9 @@ kw_site_rename_locked() (
   mv -T -- "$KW_RENAME_OLD_ROOT" "$KW_RENAME_NEW_ROOT" || return 1
   install -m 0644 -o root -g root -- "$KW_RENAME_STAGE/new-pool" "$KW_RENAME_NEW_POOL" || return 1
   install -m 0644 -o root -g root -- "$KW_RENAME_STAGE/new-vhost" "$KW_RENAME_NEW_VHOST" || return 1
+  if [[ -d $KW_RENAME_STAGE/custom-dir ]]; then
+    cp -a -- "$KW_RENAME_STAGE/custom-dir" "$KW_RENAME_NEW_CUSTOM_DIR" || return 1
+  fi
   ln -s -- "$KW_RENAME_NEW_VHOST" "$KW_RENAME_NEW_LINK" || return 1
   install -m 0644 -o root -g root -- "$KW_RENAME_STAGE/new-meta" "$KW_RENAME_NEW_META" || return 1
   for file in "$KW_RENAME_STAGE"/db/*.db; do

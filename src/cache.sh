@@ -187,7 +187,7 @@ kw_cache_state() {
   [[ -f $KW_SITE_VHOST && ! -L $KW_SITE_VHOST &&
      $(stat -c %u -- "$KW_SITE_VHOST") == 0 ]] || return 2
   base=$(kw_cache_base_vhost "$domain" "$id" "$KW_SITE_VHOST") || return 2
-  if [[ $(< "$KW_SITE_VHOST") == "$base" ]]; then
+  if kw_site_vhost_matches "$KW_SITE_VHOST" "$domain" "$id" kw_cache_base_vhost "$domain" "$id" "$KW_SITE_VHOST"; then
     [[ ! -e $KW_CACHE_ZONE && ! -L $KW_CACHE_ZONE &&
        ! -e $KW_CACHE_SNIPPET && ! -L $KW_CACHE_SNIPPET ]] || return 2
     if [[ -e $KW_CACHE_DIR || -L $KW_CACHE_DIR ]]; then
@@ -197,7 +197,7 @@ kw_cache_state() {
     KW_CACHE_STATE=off
   else
     expected=$(kw_cache_render_vhost "$domain" "$id" "$KW_SITE_VHOST") || return 2
-    [[ $(< "$KW_SITE_VHOST") == "$expected" ]] || {
+    kw_site_vhost_matches "$KW_SITE_VHOST" "$domain" "$id" kw_cache_render_vhost "$domain" "$id" "$KW_SITE_VHOST" || {
       kw_log ERROR 'Vhost tùy biến; không sửa FastCGI cache tự động.'
       return 2
     }

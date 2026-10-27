@@ -198,14 +198,75 @@ kw_nginx_vhost_identity() {
 kw_nginx_vhost_custom_plan() {
   local domain=${1,,}
   kw_site_lookup "$domain" || return 2
-  printf 'Sửa bản sao vhost của %s bằng nano: %s\n' "$domain" "$KW_SITE_VHOST"
-  printf 'Giữ nguyên marker KwVPS, server_name, root và PHP socket; không sửa site khác.\n'
-  printf 'Chỉ áp nếu Nginx kiểm tra cú pháp thành công; restart và kiểm tra trạng thái, rollback nếu lỗi.\n'
-  printf 'Có thể gián đoạn ngắn mọi site trên Nginx. Vhost tùy biến có thể không tương thích với đổi domain/SSL tự động.\n'
+  printf 'Sửa cấu hình Nginx riêng của %s bằng nano: %s\n' "$domain" "$KW_SITE_CUSTOM"
+  printf 'Thêm directive cấp server, ví dụ client_max_body_size hoặc location mới. Không sửa server_name, root, PHP socket và TLS.\n'
+  printf 'KwVPS sẽ thêm include vào vhost mẫu, kiểm tra nginx -t, restart và rollback nếu lỗi.\n'
+  printf 'Vhost đã sửa tay: KwVPS hiện diff với mẫu, yêu cầu bạn chuyển directive cần giữ vào snippet rồi xác nhận thay vhost.\n'
+}
+
+kw_nginx_custom_file_safe() {
+  local path=$1 mode
+  [[ -f $path && ! -L $path && $(stat -c %u -- "$path") == 0 ]] || return 2
+  mode=$(stat -c %a -- "$path") || return 2
+  [[ $mode =~ ^[0-7]{3,4}$ ]] && (( (8#$mode & 0022) == 0 )) || return 2
+}
+
+kw_nginx_custom_directives_safe() {
+  local path=$1
+  [[ -f $path && ! -L $path && -s $path ]] || return 2
+  # Identity, trust and nested includes remain under KwVPS control.
+  ! sed 's/[[:space:]]*#.*$//' "$path" | grep -Eiq '(^|[;{}[:space:]])(include|server|listen|server_name|root|alias|fastcgi_pass|proxy_pass|ssl_certificate|ssl_certificate_key|set_real_ip_from|real_ip_header|real_ip_recursive)([[:space:];{]|$)'
+}
+
+kw_nginx_vhost_managed() {
+  local domain=$1 id=$2 kind
+  if kw_site_vhost_matches "$KW_SITE_VHOST" "$domain" "$id" kw_site_render_vhost "$domain" "$id"; then return 0; fi
+  for kind in letsencrypt zerossl paid; do
+    if [[ $kind == paid ]]; then
+      kw_site_vhost_matches "$KW_SITE_VHOST" "$domain" "$id" kw_ssl_render_paid_vhost "$domain" "$id" && return 0
+    else
+      kw_site_vhost_matches "$KW_SITE_VHOST" "$domain" "$id" kw_ssl_render_vhost "$domain" "$id" "$kind" && return 0
+    fi
+  done
+  for kind in http letsencrypt zerossl paid; do
+    kw_site_vhost_matches "$KW_SITE_VHOST" "$domain" "$id" kw_laravel_render_vhost "$kind" "$domain" "$id" && return 0
+  done
+  # Cache templates are verified with their own managed zone and snippet.
+  kw_cache_state "$domain" >/dev/null 2>&1 && [[ $KW_CACHE_STATE == on ]]
+}
+
+kw_nginx_custom_migration_render() {
+  local domain=$1 id=$2 kind=http laravel=0
+  [[ -f $KW_SITE_VHOST && ! -L $KW_SITE_VHOST ]] || return 2
+  kw_nginx_vhost_identity "$KW_SITE_VHOST" "$domain" "$id" || return 2
+  if grep -Fq 'include /etc/nginx/kwvps-cache/' "$KW_SITE_VHOST"; then
+    kw_log ERROR 'Vhost đang có FastCGI cache; tắt cache và xem lại cấu hình trước khi chuyển.'
+    return 2
+  fi
+  grep -Fxq '# KwVPS Laravel release root' "$KW_SITE_VHOST" && laravel=1
+  if grep -Fxq '# KwVPS TLS: Paid' "$KW_SITE_VHOST"; then
+    kind=paid
+  elif grep -Fxq '# KwVPS TLS: ZeroSSL' "$KW_SITE_VHOST"; then
+    kind=zerossl
+  elif grep -Fxq "# KwVPS TLS: Let's Encrypt" "$KW_SITE_VHOST"; then
+    kind=letsencrypt
+  elif grep -Eq '^[[:space:]]*(listen[[:space:]]+.*443|ssl_certificate)' "$KW_SITE_VHOST"; then
+    kw_log ERROR 'Vhost HTTPS thiếu marker KwVPS; không tự suy đoán chứng chỉ.'
+    return 2
+  fi
+  if ((laravel)); then
+    kw_laravel_render_vhost "$kind" "$domain" "$id"
+  else
+    case "$kind" in
+      http) kw_site_render_vhost "$domain" "$id" ;;
+      paid) kw_ssl_render_paid_vhost "$domain" "$id" ;;
+      *) kw_ssl_render_vhost "$domain" "$id" "$kind" ;;
+    esac
+  fi | kw_cf_realip_render_for_site "$domain" "$id"
 }
 
 kw_nginx_vhost_custom_locked() (
-  local domain=$1 id vhost temp='' backup='' swapped=0 committed=0 restart_attempted=0 mode
+  local domain=$1 id vhost temp='' vhost_temp='' backup='' old_custom='' swapped=0 committed=0 custom_swapped=0 had_custom=0 migrating=0
   kw_nginx_ready || return 2
   [[ -t 0 && -t 1 ]] || { kw_log ERROR 'nano cần terminal tương tác.'; return 2; }
   kw_has nano || return 2
@@ -213,41 +274,70 @@ kw_nginx_vhost_custom_locked() (
   id=${KW_SITE_OWNER#kw}; vhost=$KW_SITE_VHOST
   [[ -f $vhost && ! -L $vhost && $(stat -c %u -- "$vhost") == 0 &&
      -L $KW_SITE_ENABLED && $(readlink -f -- "$KW_SITE_ENABLED") == "$vhost" ]] || return 2
-  mode=$(stat -c %a -- "$vhost") || return 2
-  [[ $mode =~ ^[0-7]{3,4}$ ]] && (( (8#$mode & 0022) == 0 )) || return 2
-  kw_nginx_vhost_identity "$vhost" "$domain" "$id" || {
-    kw_log ERROR 'Vhost hiện tại đã đổi định danh domain/source/socket; không tự sửa.'
-    return 2
-  }
+  kw_nginx_vhost_managed "$domain" "$id" || migrating=1
+  [[ ! -e /etc/nginx/kwvps-custom && ! -L /etc/nginx/kwvps-custom ]] ||
+    [[ -d /etc/nginx/kwvps-custom && ! -L /etc/nginx/kwvps-custom &&
+       $(stat -c %u:%a -- /etc/nginx/kwvps-custom) == 0:755 ]] || return 2
+  [[ ! -e $KW_SITE_CUSTOM_DIR && ! -L $KW_SITE_CUSTOM_DIR ]] ||
+    [[ -d $KW_SITE_CUSTOM_DIR && ! -L $KW_SITE_CUSTOM_DIR &&
+       $(stat -c %u:%a -- "$KW_SITE_CUSTOM_DIR") == 0:755 ]] || return 2
+  [[ ! -e $KW_SITE_CUSTOM && ! -L $KW_SITE_CUSTOM ]] ||
+    kw_nginx_custom_file_safe "$KW_SITE_CUSTOM" || return 2
   nginx -t >/dev/null 2>&1 || { kw_log ERROR 'Nginx hiện đã lỗi; sửa cấu hình hiện tại trước.'; return 2; }
-  temp=$(mktemp /etc/nginx/sites-available/.kwvps-edit.XXXXXXXX) || return 1
-  trap 'if ((swapped == 1 && committed == 0)); then if install -m 0644 -o root -g root -- "$backup" "$vhost"; then if ((restart_attempted)); then kw_nginx_test_restart || kw_log ERROR "Rollback Nginx cần kiểm tra thủ công: $backup"; else nginx -t || kw_log ERROR "Rollback Nginx cần kiểm tra thủ công: $backup"; fi; else kw_log ERROR "Cần phục hồi vhost thủ công từ $backup"; fi; fi; [[ -z $temp ]] || rm -f -- "$temp"' EXIT
-  cp -- "$vhost" "$temp" || return 1
+  temp=$(mktemp /etc/nginx/sites-available/.kwvps-custom-edit.XXXXXXXX) || return 1
+  trap 'if ((committed == 0)); then if ((swapped)); then install -m 0644 -o root -g root -- "$backup" "$vhost" || kw_log ERROR "Cần phục hồi vhost từ $backup"; fi; if ((custom_swapped)); then if ((had_custom)); then install -m 0644 -o root -g root -- "$old_custom" "$KW_SITE_CUSTOM" || kw_log ERROR "Cần phục hồi snippet từ $old_custom"; else rm -f -- "$KW_SITE_CUSTOM"; fi; fi; if ((swapped || custom_swapped)); then kw_nginx_test_restart || kw_log ERROR "Cần kiểm tra Nginx sau rollback: $domain"; fi; fi; [[ -z $temp ]] || rm -f -- "$temp"; [[ -z $vhost_temp ]] || rm -f -- "$vhost_temp"' EXIT
+  if ((migrating)); then
+    vhost_temp=$(mktemp /etc/nginx/sites-available/.kwvps-migrate-vhost.XXXXXXXX) || return 1
+    kw_nginx_custom_migration_render "$domain" "$id" > "$vhost_temp" || {
+      kw_log ERROR 'Không nhận diện được vhost cũ; giữ nguyên để kiểm tra thủ công.'
+      return 2
+    }
+    printf 'Khác biệt giữa vhost hiện tại và mẫu mới (dấu - là dòng sẽ bỏ; dấu + là mẫu KwVPS):\n'
+    diff -u --label "Đang chạy: $vhost" --label 'Mẫu KwVPS' "$vhost" "$vhost_temp" || {
+      [[ $? == 1 ]] || return 2
+    }
+    printf 'Hãy đưa các directive cần giữ vào snippet. Bản vhost cũ được lưu root-only.\n'
+    kw_prompt_yes_no_token "Đã xem khác biệt và muốn chuyển $domain sang vhost mẫu?" "$domain" || return 0
+  fi
+  if [[ -f $KW_SITE_CUSTOM ]]; then
+    cp -- "$KW_SITE_CUSTOM" "$temp" || return 1
+    had_custom=1
+  else
+    printf '# Nginx tuy chinh cap server; khong sua directive do KwVPS quan ly.\n' > "$temp" || return 1
+  fi
   chmod 0600 -- "$temp" || return 1
   nano "$temp" || return 1
-  kw_nginx_vhost_identity "$temp" "$domain" "$id" || {
-    kw_log ERROR 'Bản sửa đã đổi server_name, source hoặc PHP socket; vhost gốc được giữ nguyên.'
+  kw_nginx_custom_directives_safe "$temp" || {
+    kw_log ERROR 'Snippet chứa directive quản lý bởi KwVPS hoặc rỗng; chưa áp dụng.'
     return 2
   }
-  if cmp -s -- "$vhost" "$temp"; then printf 'Không có thay đổi.\n'; return 0; fi
+  if ((had_custom && !migrating)) && cmp -s -- "$KW_SITE_CUSTOM" "$temp"; then printf 'Không có thay đổi.\n'; return 0; fi
   kw_nginx_backup_file "$vhost" "custom-$id" || return 1
   backup=$KW_NGINX_BACKUP
+  if ((had_custom)); then
+    kw_nginx_backup_file "$KW_SITE_CUSTOM" "snippet-$id" || return 1
+    old_custom=$KW_NGINX_BACKUP
+  fi
+  install -d -m 0755 -o root -g root -- /etc/nginx/kwvps-custom "$KW_SITE_CUSTOM_DIR" || return 1
+  if ((migrating)) || ! grep -Fxq "  include /etc/nginx/kwvps-custom/$id/*.conf;" "$vhost"; then
+    if ((!migrating)); then
+      vhost_temp=$(mktemp /etc/nginx/sites-available/.kwvps-custom-vhost.XXXXXXXX) || return 1
+      awk -v id="$id" '$0 == "  error_log /var/log/nginx/kwvps-" id ".error.log;" { print; print "  include /etc/nginx/kwvps-custom/" id "/*.conf;"; found++; next } {print} END {if (found != 1) exit 2}' "$vhost" > "$vhost_temp" || return 2
+    fi
+    chmod 0644 -- "$vhost_temp" || return 1
+    mv -T -- "$vhost_temp" "$vhost" || return 1
+    vhost_temp=''
+    swapped=1
+  fi
   chown -- root:root "$temp" || return 1
   chmod 0644 -- "$temp" || return 1
-  mv -T -- "$temp" "$vhost" || return 1
+  mv -T -- "$temp" "$KW_SITE_CUSTOM" || return 1
   temp=''
-  # shellcheck disable=SC2034 # Read by the EXIT rollback trap.
-  swapped=1
-  nginx -t || return 1
-  # shellcheck disable=SC2034 # Read by the EXIT rollback trap.
-  restart_attempted=1
-  if ! systemctl restart nginx || ! systemctl is-active --quiet nginx; then
-    kw_log ERROR 'Nginx không active sau khi áp vhost; đang phục hồi bản trước.'
-    return 1
-  fi
+  custom_swapped=1
+  kw_nginx_test_restart || return 1
   # shellcheck disable=SC2034 # Read by the EXIT rollback trap.
   committed=1
-  printf 'Đã áp vhost %s, kiểm tra nginx -t và restart Nginx. Bản trước: %s\n' "$domain" "$backup"
+  printf 'Đã áp snippet %s, kiểm tra nginx -t và restart Nginx. Bản vhost trước: %s\n' "$KW_SITE_CUSTOM" "$backup"
 )
 
 kw_nginx_vhost_custom() (
@@ -266,7 +356,7 @@ kw_nginx_vhost_custom_interactive() {
   kw_site_prompt_domain || return 0
   domain=$KW_SITE_CHOICE
   kw_nginx_vhost_custom_plan "$domain" || return 2
-  kw_prompt_yes_no_token "Mở bản sao vhost $domain trong nano?" "$domain" || return 0
+  kw_prompt_yes_no_token "Mở snippet Nginx của $domain trong nano?" "$domain" || return 0
   confirm=$KW_PROMPT_VALUE
   kw_nginx_vhost_custom "$domain" "${confirm,,}"
 }

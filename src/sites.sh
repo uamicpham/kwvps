@@ -55,6 +55,14 @@ kw_site_paths() {
   KW_SITE_ENABLED="/etc/nginx/sites-enabled/kwvps-${id}.conf"
   KW_SITE_META="/etc/kwvps/sites/${id}.site"
   KW_SITE_SOCKET="/run/php/kwvps-${id}.sock"
+  KW_SITE_CUSTOM_DIR="/etc/nginx/kwvps-custom/${id}"
+  KW_SITE_CUSTOM="${KW_SITE_CUSTOM_DIR}/custom.conf"
+}
+
+kw_site_custom_parent_safe() {
+  [[ ! -e /etc/nginx/kwvps-custom && ! -L /etc/nginx/kwvps-custom ]] ||
+    [[ -d /etc/nginx/kwvps-custom && ! -L /etc/nginx/kwvps-custom &&
+       $(stat -c %u:%a -- /etc/nginx/kwvps-custom) == 0:755 ]]
 }
 
 kw_site_plan() {
@@ -105,6 +113,8 @@ server {
   access_log /var/log/nginx/kwvps-${id}.access.log;
   error_log /var/log/nginx/kwvps-${id}.error.log;
 
+  include /etc/nginx/kwvps-custom/${id}/*.conf;
+
   location / {
     try_files \$uri \$uri/ /index.php?\$args;
   }
@@ -123,18 +133,21 @@ server {
 EOF
 }
 
-# Compare an exact KwVPS template while allowing only KwVPS's managed Tunnel
-# Real-IP overlay. Custom Nginx directives still make the comparison fail.
+# Compare the managed template, including pre-include vhosts from older releases.
+# Only the separate custom snippet is user editable.
 kw_site_vhost_matches() {
   local file=$1 domain=$2 id=$3 normalized expected
   shift 3
   [[ -f $file && ! -L $file ]] || return 2
   cmp -s -- "$file" <("$@") && return 0
-  grep -Fq '# KwVPS Tunnel Real IP (managed)' -- "$file" || return 1
+  cmp -s -- "$file" <("$@" | sed "/^  include \/etc\/nginx\/kwvps-custom\/${id}\/\*\.conf;$/d") && return 0
   # Sentinels preserve trailing newlines in command substitution; a failed
   # overlay must never be mistaken for an empty/valid template.
   normalized=$(kw_cf_realip_vhost_overlay dns "$domain" "$id" "$file" && printf '\001') || return 2
-  expected=$("$@" && printf '\001') || return 2
+  expected=$("$@" | kw_cf_realip_vhost_overlay dns "$domain" "$id" && printf '\001') || return 2
+  [[ $normalized == "$expected" ]] && return 0
+  expected=$("$@" | kw_cf_realip_vhost_overlay dns "$domain" "$id" |
+    sed "/^  include \/etc\/nginx\/kwvps-custom\/${id}\/\*\.conf;$/d" && printf '\001') || return 2
   [[ $normalized == "$expected" ]]
 }
 
@@ -190,6 +203,7 @@ kw_site_lookup() {
   [[ $meta_domain == "$domain" && $meta_id == "$id" ]] || return 2
   kw_site_php_valid "$meta_php" || return 2
   kw_site_paths "$id" "$meta_php"
+  kw_site_custom_parent_safe || return 2
   [[ $meta_owner == "$KW_SITE_OWNER" ]] || return 2
   [[ -d $KW_SITE_ROOT && ! -L $KW_SITE_ROOT && \
      -d $KW_SITE_PUBLIC && ! -L $KW_SITE_PUBLIC ]] || return 2
@@ -366,6 +380,7 @@ kw_site_preflight() {
     kw_log ERROR 'Nginx hoặc PHP-FPM chưa chạy.'; return 2;
   fi
   kw_site_paths "$id" "$php"
+  kw_site_custom_parent_safe || return 2
   local parent owner mode
   for parent in /etc/kwvps /etc/kwvps/sites /var/www/kwvps \
     "/etc/php/${php}/fpm/pool.d" /etc/nginx/sites-available /etc/nginx/sites-enabled; do
@@ -397,7 +412,7 @@ kw_site_preflight() {
     kw_log ERROR "Domain đã tồn tại hoặc tạo cùng site ID ($id): $domain"
     return 2
   fi
-  for path in "$KW_SITE_ROOT" "$KW_SITE_POOL" "$KW_SITE_VHOST" "$KW_SITE_ENABLED" "$KW_SITE_META" "$KW_SITE_SOCKET"; do
+  for path in "$KW_SITE_ROOT" "$KW_SITE_POOL" "$KW_SITE_VHOST" "$KW_SITE_ENABLED" "$KW_SITE_META" "$KW_SITE_SOCKET" "$KW_SITE_CUSTOM_DIR"; do
     [[ ! -e $path && ! -L $path ]] || {
       if [[ $path == "$KW_SITE_META" ]]; then
         kw_log ERROR "Domain đã tồn tại hoặc tạo cùng site ID ($id): $domain"
@@ -1125,6 +1140,15 @@ kw_site_remove_preflight() {
   [[ -f $KW_SITE_POOL && ! -L $KW_SITE_POOL && \
      -f $KW_SITE_VHOST && ! -L $KW_SITE_VHOST && \
      -L $KW_SITE_ENABLED && $(readlink -- "$KW_SITE_ENABLED") == "$KW_SITE_VHOST" ]] || return 2
+  if [[ -e $KW_SITE_CUSTOM_DIR || -L $KW_SITE_CUSTOM_DIR ]]; then
+    [[ -d $KW_SITE_CUSTOM_DIR && ! -L $KW_SITE_CUSTOM_DIR &&
+       $(stat -c %u:%a -- "$KW_SITE_CUSTOM_DIR") == 0:755 ]] || return 2
+    local custom_file
+    for custom_file in "$KW_SITE_CUSTOM_DIR"/*; do
+      [[ -e $custom_file || -L $custom_file ]] || continue
+      [[ $custom_file == "$KW_SITE_CUSTOM" ]] && kw_nginx_custom_file_safe "$custom_file" || return 2
+    done
+  fi
   cmp -s -- "$KW_SITE_POOL" <(kw_site_render_pool "$id" "$KW_SITE_OWNER") || {
     kw_log ERROR 'Pool đã tùy chỉnh; không tự gỡ.'; return 2;
   }
@@ -1155,7 +1179,7 @@ kw_site_remove_preflight() {
 kw_site_remove_rollback() {
   ((KW_REMOVE_DONE == 0)) || return 0
   local name source target
-  for name in root meta pool vhost enabled renewal ingress; do
+  for name in root meta pool vhost enabled renewal ingress custom; do
     case "$name" in
       root) source="$KW_REMOVE_DIR/site-root"; target=$KW_SITE_ROOT ;;
       meta) source="$KW_REMOVE_DIR/site.meta"; target=$KW_SITE_META ;;
@@ -1164,6 +1188,7 @@ kw_site_remove_rollback() {
       enabled) source="$KW_REMOVE_DIR/enabled.conf"; target=$KW_SITE_ENABLED ;;
       renewal) source="$KW_REMOVE_DIR/renewal.conf"; target=$KW_REMOVE_RENEWAL ;;
       ingress) source="$KW_REMOVE_DIR/ingress.mode"; target=$KW_REMOVE_INGRESS ;;
+      custom) source="$KW_REMOVE_DIR/custom-dir"; target=$KW_SITE_CUSTOM_DIR ;;
     esac
     [[ -n $target ]] || continue
     if [[ -e $source || -L $source ]]; then
@@ -1206,6 +1231,9 @@ kw_site_remove_apply_locked() (
   KW_REMOVE_NGINX_CHANGED=1
   mv -T -- "$KW_SITE_ENABLED" "$KW_REMOVE_DIR/enabled.conf" || return 1
   mv -T -- "$KW_SITE_VHOST" "$KW_REMOVE_DIR/vhost.conf" || return 1
+  if [[ -d $KW_SITE_CUSTOM_DIR ]]; then
+    mv -T -- "$KW_SITE_CUSTOM_DIR" "$KW_REMOVE_DIR/custom-dir" || return 1
+  fi
   # shellcheck disable=SC2034 # A move can partially mutate the service configuration.
   KW_REMOVE_FPM_CHANGED=1
   mv -T -- "$KW_SITE_POOL" "$KW_REMOVE_DIR/pool.conf" || return 1
@@ -1308,7 +1336,19 @@ kw_site_retired_preflight() {
   [[ $meta_domain == "$domain" && $meta_id == "$id" ]] || return 2
   kw_site_php_valid "$meta_php" || return 2
   kw_site_paths "$id" "$meta_php"
+  kw_site_custom_parent_safe || return 2
   [[ $meta_owner == "$KW_SITE_OWNER" ]] || return 2
+  if [[ -e $dir/custom-dir || -L $dir/custom-dir ]]; then
+    [[ -d $dir/custom-dir && ! -L $dir/custom-dir &&
+       $(stat -c %u:%a -- "$dir/custom-dir") == 0:755 &&
+       ! -e $KW_SITE_CUSTOM_DIR && ! -L $KW_SITE_CUSTOM_DIR ]] || return 2
+    local custom_file
+    for custom_file in "$dir/custom-dir"/*; do
+      [[ -e $custom_file || -L $custom_file ]] || continue
+      [[ $custom_file == "$dir/custom-dir/custom.conf" ]] &&
+        kw_nginx_custom_file_safe "$custom_file" || return 2
+    done
+  fi
   KW_RETIRED_PHP=$meta_php
   KW_RETIRED_DIR=$dir
   getent passwd "$KW_SITE_OWNER" >/dev/null || return 2
@@ -1350,7 +1390,7 @@ kw_site_retired_preflight() {
       [[ ! -e $KW_RETIRED_RENEWAL && ! -L $KW_RETIRED_RENEWAL ]] || return 2
     fi
   fi
-  for path in "$KW_SITE_ROOT" "$KW_SITE_META" "$KW_SITE_POOL" "$KW_SITE_VHOST" "$KW_SITE_ENABLED" "$KW_SITE_SOCKET"; do
+  for path in "$KW_SITE_ROOT" "$KW_SITE_META" "$KW_SITE_POOL" "$KW_SITE_VHOST" "$KW_SITE_ENABLED" "$KW_SITE_SOCKET" "$KW_SITE_CUSTOM_DIR"; do
     [[ ! -e $path && ! -L $path ]] || { kw_log ERROR "Đích đã tồn tại: $path"; return 2; }
   done
   dump=$(nginx -T 2>&1) || return 2
@@ -1372,7 +1412,7 @@ kw_site_retired_plan() {
 kw_site_retired_rollback() {
   ((KW_RETIRED_DONE == 0)) || return 0
   local name source target
-  for name in renewal enabled vhost pool meta root ingress; do
+  for name in renewal enabled vhost pool meta root ingress custom; do
     [[ $name != ingress || $KW_RETIRED_HAS_INGRESS == 1 ]] || continue
     case "$name" in
       renewal) source=$KW_RETIRED_RENEWAL; target="$KW_RETIRED_DIR/renewal.conf" ;;
@@ -1382,6 +1422,7 @@ kw_site_retired_rollback() {
       meta) source=$KW_SITE_META; target="$KW_RETIRED_DIR/site.meta" ;;
       root) source=$KW_SITE_ROOT; target="$KW_RETIRED_DIR/site-root" ;;
       ingress) source=$KW_RETIRED_INGRESS; target="$KW_RETIRED_DIR/ingress.mode" ;;
+      custom) source=$KW_SITE_CUSTOM_DIR; target="$KW_RETIRED_DIR/custom-dir" ;;
     esac
     [[ -n $source ]] || continue
     if [[ -e $source || -L $source ]]; then
@@ -1427,6 +1468,10 @@ kw_site_retired_apply_locked() (
   # shellcheck disable=SC2034 # A move can partially mutate the service configuration.
   KW_RETIRED_NGINX_CHANGED=1
   mv -T -- "$KW_RETIRED_DIR/vhost.conf" "$KW_SITE_VHOST" || return 1
+  if [[ -d $KW_RETIRED_DIR/custom-dir ]]; then
+    install -d -m 0755 -o root -g root -- /etc/nginx/kwvps-custom || return 1
+    mv -T -- "$KW_RETIRED_DIR/custom-dir" "$KW_SITE_CUSTOM_DIR" || return 1
+  fi
   mv -T -- "$KW_RETIRED_DIR/enabled.conf" "$KW_SITE_ENABLED" || return 1
   if [[ -n $KW_RETIRED_RENEWAL ]]; then
     mv -T -- "$KW_RETIRED_DIR/renewal.conf" "$KW_RETIRED_RENEWAL" || return 1
@@ -1511,7 +1556,18 @@ kw_site_purge_preflight() {
   for entry in "$dir"/*; do
     [[ -e $entry || -L $entry ]] || continue
     base=${entry##*/}
-    case "$base" in site.meta|site-root|pool.conf|vhost.conf|enabled.conf|renewal.conf|ingress.mode) ;; *) kw_log ERROR "Gói giữ có mục lạ: $base"; return 2 ;; esac
+    case "$base" in site.meta|site-root|pool.conf|vhost.conf|enabled.conf|renewal.conf|ingress.mode) ;;
+      custom-dir)
+        [[ -d $entry && ! -L $entry && $(stat -c %u:%a -- "$entry") == 0:755 ]] || return 2
+        local custom_file
+        for custom_file in "$entry"/*; do
+          [[ -e $custom_file || -L $custom_file ]] || continue
+          [[ $custom_file == "$entry/custom.conf" ]] &&
+            kw_nginx_custom_file_safe "$custom_file" || return 2
+        done
+        ;;
+      *) kw_log ERROR "Gói giữ có mục lạ: $base"; return 2 ;;
+    esac
   done
   KW_PURGE_DIR=$dir
 }

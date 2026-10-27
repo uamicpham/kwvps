@@ -283,14 +283,14 @@ Trên Ubuntu 24.04 lab, PPA có PHP 8.4.27/8.5.12 nhưng cần `php-common` mớ
 1. Phục hồi cấu hình theo domain
 2. Áp baseline global
 3. Kiểm tra cấu hình web server
-4. Sửa vhost theo domain (nano)
+4. Sửa cấu hình riêng theo domain (nano)
 0. Quay lại
 ```
 
 - **Phục hồi:** chọn site và bản backup hoặc tái tạo từ metadata/template. Giữ SSL, PHP socket, cache, rate limit và Tunnel của site; hiển thị diff và cảnh báo custom config bị thay thế.
 - **Baseline global:** bản cấu hình nền có phiên bản; hiện thay đổi và toàn bộ site bị ảnh hưởng. Không ghi đè file người dùng quản lý hoặc lặp lại include Real IP. Không tự chọn thông số “tối ưu” cực đoan cho mọi cấu hình VPS.
 - **Kiểm tra:** chạy kiểm tra cú pháp toàn bộ cấu hình, trùng hostname/listen, socket đích và chứng chỉ. Cú pháp đúng không đảm bảo website đúng; sau khi thay cấu hình cần restart, xác nhận Nginx active và thử HTTP/health check đối với site bị ảnh hưởng.
-- **Sửa vhost:** chọn site theo số; KwVPS mở bản sao tạm trong nano. Không cho đổi marker quản lý, `server_name`, document root hoặc PHP-FPM socket. Nếu có thay đổi, KwVPS lưu vhost cũ trong backup root-only, áp bản mới, chạy `nginx -t`, restart và kiểm tra Nginx active; lỗi sẽ phục hồi bản cũ. Cấu hình tùy biến có thể khiến thao tác đổi domain/SSL sau này bị từ chối; sau sửa cần thử trang web thật.
+- **Cấu hình riêng:** chọn site theo số; KwVPS mở `/etc/nginx/kwvps-custom/<site-id>/custom.conf` bằng nano. File được include trong server phục vụ ứng dụng ở HTTP hoặc HTTPS, không nằm trong server chuyển hướng HTTP → HTTPS. Có thể thêm `client_max_body_size`, header hoặc location mới; không nhập `server_name`, `root`, `listen`, `include`, PHP socket, TLS hay Real IP vì KwVPS quản lý các phần đó. KwVPS kiểm tra `nginx -t`, restart và hoàn tác nếu lỗi. Snippet đi cùng thao tác đổi domain, đưa site vào vùng giữ/phục hồi và backup cấu hình domain. Khi đổi domain, snippet còn chứa tên miền hoặc site ID cũ sẽ bị từ chối để bạn sửa trước. Nếu vhost đã sửa tay, KwVPS hiện diff với vhost mẫu để bạn xem, yêu cầu xác nhận chuyển sang mẫu và mở nano để đưa các directive cần giữ vào snippet. Bản vhost cũ được lưu root-only; nếu vhost không thể nhận diện an toàn hoặc đang có FastCGI cache, KwVPS từ chối chuyển tự động.
 
 Ghi cấu hình theo giao dịch: lưu trước → chuẩn bị → kiểm tra cú pháp → restart → xác nhận dịch vụ active và health check site khi phù hợp → hoàn tác cấu hình nếu lỗi. Restart có thể gây gián đoạn ngắn; nên thực hiện trong khung bảo trì với site quan trọng. Không để một menu ghi trực tiếp đè file của menu khác.
 

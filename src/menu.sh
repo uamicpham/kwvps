@@ -15,7 +15,7 @@ kw_catalog() {
     ssh) printf '%s\n' 'Đổi port SSH|pending' 'Đổi mật khẩu tài khoản SSH|ssh-password' 'Giới hạn đăng nhập|ssh-limits' 'Quản lý public key|ssh-keys' 'Chỉ cho phép AuthKey|pending' ;;
     db) printf '%s\n' 'Danh sách DB|db-managed-list' 'Danh sách User DB|db-users-list' 'Đổi Pass Database (User DB)|db-password' 'Tạo DB|db-custom-create' 'Xóa DB|db-drop-named' 'Import DB|db-import-upload' 'Export DB|db-export-named' ;;
     php) printf '%s\n' 'Danh sách PHP/package|packages' 'Kiểm tra bản vá PHP|php-security' 'Cấu hình PHP pool từng site|php-pool' 'Đổi PHP version theo site|php-switch' 'ionCube theo version|php-ioncube' 'Custom pool (nano)|php-custom' 'Cài gói PHP-FPM|php-install' ;;
-    nginx) printf '%s\n' 'Phục hồi vhost HTTP của domain|nginx-restore' 'Áp baseline global|nginx-baseline' 'Kiểm tra cấu hình web server|nginx-check' 'Sửa vhost theo domain (nano)|nginx-vhost-custom' ;;
+    nginx) printf '%s\n' 'Phục hồi vhost HTTP của domain|nginx-restore' 'Áp baseline global|nginx-baseline' 'Kiểm tra cấu hình web server|nginx-check' 'Sửa cấu hình riêng theo domain (nano)|nginx-vhost-custom' ;;
     fail2ban) printf '%s\n' 'Trạng thái và jail|fail2ban' 'Xem IP bị khóa|f2b-banned' 'Khóa IPv4 thủ công|f2b-ban' 'Mở khóa IPv4|f2b-unban' ;;
     utilities) printf '%s\n' 'Cài/kiểm tra quyền phpMyAdmin|pma-permissions' 'phpMyAdmin theo site|pma-site' 'phpMyAdmin admin tất cả DB|pma-admin' ;;
     cron) printf '%s\n' 'Xem crontab tài khoản hiện tại|cron' 'Xem crontab chung/root|cron-system' 'Custom root crontab (nano)|cron-nano' ;;

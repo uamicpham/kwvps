@@ -83,6 +83,22 @@ kw_config_backup_preflight() {
   for file in "$KW_SITE_META" "$KW_SITE_POOL" "$KW_SITE_VHOST"; do
     [[ -f $file && ! -L $file && $(stat -c %u -- "$file") == 0 ]] || return 2
   done
+  if [[ -e $KW_SITE_CUSTOM || -L $KW_SITE_CUSTOM ]]; then
+    [[ -d $KW_SITE_CUSTOM_DIR && ! -L $KW_SITE_CUSTOM_DIR &&
+       $(stat -c %u:%a -- "$KW_SITE_CUSTOM_DIR") == 0:755 ]] || return 2
+    kw_nginx_custom_file_safe "$KW_SITE_CUSTOM" &&
+      kw_nginx_custom_directives_safe "$KW_SITE_CUSTOM" || return 2
+    grep -Fxq "  include /etc/nginx/kwvps-custom/${KW_SITE_OWNER#kw}/*.conf;" "$KW_SITE_VHOST" || return 2
+  fi
+  if [[ -e $KW_SITE_CUSTOM_DIR || -L $KW_SITE_CUSTOM_DIR ]]; then
+    [[ -d $KW_SITE_CUSTOM_DIR && ! -L $KW_SITE_CUSTOM_DIR ]] || return 2
+    local custom_file
+    for custom_file in "$KW_SITE_CUSTOM_DIR"/*; do
+      [[ -e $custom_file || -L $custom_file ]] || continue
+      [[ $custom_file == "$KW_SITE_CUSTOM" ]] &&
+        kw_nginx_custom_file_safe "$custom_file" || return 2
+    done
+  fi
   [[ -L $KW_SITE_ENABLED && $(readlink -f -- "$KW_SITE_ENABLED") == "$KW_SITE_VHOST" ]] || return 2
   kw_backup_dir_safe /var/backups 0022 || return 2
   if [[ -e $KW_BACKUP_ROOT || -L $KW_BACKUP_ROOT ]]; then
@@ -112,19 +128,21 @@ kw_config_backup_locked() (
   fi
   stamp=$(date -u +%Y%m%d-%H%M%S) || return 1
   stage=$(mktemp -d "$KW_BACKUP_ROOT/.config-stage.XXXXXXXX") || return 1
-  trap '[[ -z $archive ]] || rm -f -- "$archive"; [[ -z $checksum ]] || rm -f -- "$checksum"; [[ -z $secret_archive ]] || rm -f -- "$secret_archive"; [[ -z $secret_checksum ]] || rm -f -- "$secret_checksum"; if ((final_owned && ! published)); then rm -f -- "$final" "$final.sha256"; if [[ -n $secret_final ]]; then rm -f -- "$secret_final" "$secret_final.sha256"; fi; fi; if [[ -n $stage ]]; then rm -f -- "$stage/site.meta" "$stage/pool.conf" "$stage/vhost.conf" "$stage/cloudflare.zone"; rmdir -- "$stage" || true; fi' EXIT
+  trap '[[ -z $archive ]] || rm -f -- "$archive"; [[ -z $checksum ]] || rm -f -- "$checksum"; [[ -z $secret_archive ]] || rm -f -- "$secret_archive"; [[ -z $secret_checksum ]] || rm -f -- "$secret_checksum"; if ((final_owned && ! published)); then rm -f -- "$final" "$final.sha256"; if [[ -n $secret_final ]]; then rm -f -- "$secret_final" "$secret_final.sha256"; fi; fi; if [[ -n $stage ]]; then rm -f -- "$stage/site.meta" "$stage/pool.conf" "$stage/vhost.conf" "$stage/custom.conf" "$stage/cloudflare.zone"; rmdir -- "$stage" || true; fi' EXIT
   chmod 0700 -- "$stage" || return 1
   install -m 0600 -o root -g root -- "$KW_SITE_META" "$stage/site.meta" || return 1
   install -m 0600 -o root -g root -- "$KW_SITE_POOL" "$stage/pool.conf" || return 1
   install -m 0600 -o root -g root -- "$KW_SITE_VHOST" "$stage/vhost.conf" || return 1
+  if [[ -f $KW_SITE_CUSTOM ]]; then
+    install -m 0600 -o root -g root -- "$KW_SITE_CUSTOM" "$stage/custom.conf" || return 1
+  fi
   if [[ -n $zone ]]; then printf '%s\n%s\n' "$domain" "$zone" > "$stage/cloudflare.zone" || return 1; fi
   archive=$(mktemp "$KW_BACKUP_ROOT/.config-archive.XXXXXXXX") || return 1
   chmod 0600 -- "$archive" || return 1
-  if [[ -n $zone ]]; then
-    tar -C "$stage" -czf "$archive" -- site.meta pool.conf vhost.conf cloudflare.zone || return 1
-  else
-    tar -C "$stage" -czf "$archive" -- site.meta pool.conf vhost.conf || return 1
-  fi
+  local -a entries=(site.meta pool.conf vhost.conf)
+  [[ ! -f $stage/custom.conf ]] || entries+=(custom.conf)
+  [[ -z $zone ]] || entries+=(cloudflare.zone)
+  tar -C "$stage" -czf "$archive" -- "${entries[@]}" || return 1
   [[ -s $archive ]] && tar -tzf "$archive" >/dev/null || return 1
   digest=$(sha256sum -- "$archive") || return 1
   digest=${digest%% *}
@@ -172,7 +190,7 @@ kw_config_backup_locked() (
   published=1
   printf 'Đã backup cấu hình domain %s: %s\nSHA-256: %s\n' "$domain" "$final" "$digest"
   if [[ -n $zone ]]; then printf 'Zone ID nằm trong archive; token riêng ở %s (mã hóa bằng mật khẩu, không in giá trị). Giữ CẢ HAI file và checksum khi chuyển VPS.\n' "$secret_final"; fi
-  printf 'Gồm metadata, PHP pool, Nginx vhost và Cloudflare zone/token nếu đã cấu hình. Chưa gồm source, DB, SSL key, ingress, rate limit, cron và cấu hình dịch vụ chung.\n'
+  printf 'Gồm metadata, PHP pool, Nginx vhost/snippet riêng và Cloudflare zone/token nếu đã cấu hình. Chưa gồm source, DB, SSL key, ingress, rate limit, cron và cấu hình dịch vụ chung.\n'
 )
 
 kw_config_backup() (
@@ -245,14 +263,16 @@ kw_config_backup_verify() {
   path="$KW_BACKUP_ROOT/$name"
   kw_config_checksum_valid "$path" || return 2
   listing=$(tar -tzf "$path") || return 2
-  if [[ $listing == $'site.meta\npool.conf\nvhost.conf\ncloudflare.zone' ]]; then
+  if [[ $listing == $'site.meta\npool.conf\nvhost.conf\ncloudflare.zone' ||
+        $listing == $'site.meta\npool.conf\nvhost.conf\ncustom.conf\ncloudflare.zone' ]]; then
     kw_config_checksum_valid "$path.cf.enc" || return 2
     zone_manifest=$(tar -xOzf "$path" cloudflare.zone) || return 2
     kw_config_zone_manifest_valid "$zone_manifest" || return 2
     domain=${zone_manifest%%$'\n'*}; zone=${zone_manifest#*$'\n'}
     kw_domain_valid "$domain" && kw_cf_zone_id_valid "$zone" || return 2
   else
-    [[ $listing == $'site.meta\npool.conf\nvhost.conf' ]] || return 2
+    [[ $listing == $'site.meta\npool.conf\nvhost.conf' ||
+       $listing == $'site.meta\npool.conf\nvhost.conf\ncustom.conf' ]] || return 2
     [[ ! -e $path.cf.enc && ! -L $path.cf.enc &&
        ! -e $path.cf.enc.sha256 && ! -L $path.cf.enc.sha256 ]] || return 2
   fi
@@ -289,7 +309,7 @@ kw_config_backup_list() {
 
 kw_config_restore_locked() (
   # shellcheck disable=SC2034 # rollback_ok is read by the EXIT rollback trap.
-  local domain=$1 name=$2 password=${3:-} id stage='' changed=0 committed=0 pool_changed=0 vhost_changed=0 pool_applied=0 vhost_applied=0 rollback_ok=1 old_identity new_identity old_tls=0 new_tls=0 zone_manifest='' secret_zone='' secret_domain='' restored_token=''
+  local domain=$1 name=$2 password=${3:-} id stage='' changed=0 committed=0 pool_changed=0 vhost_changed=0 custom_changed=0 custom_applied=0 custom_existed=0 pool_applied=0 vhost_applied=0 rollback_ok=1 old_identity new_identity old_tls=0 new_tls=0 zone_manifest='' secret_zone='' secret_domain='' restored_token='' listing
   kw_config_backup_preflight "$domain" || return 2
   id=${KW_SITE_OWNER#kw}
   kw_config_backup_matches_site "$name" "$domain" "$id" || return 2
@@ -308,17 +328,25 @@ kw_config_restore_locked() (
           kw_log ERROR "Rollback PHP-FPM cần kiểm tra thủ công: $stage"
         fi
       fi
+      if ((custom_applied)); then
+        if ((custom_existed)); then
+          install -m 0644 -o root -g root -- "$stage/old.custom" "$KW_SITE_CUSTOM" || rollback_ok=0
+        else
+          rm -f -- "$KW_SITE_CUSTOM" || rollback_ok=0
+        fi
+      fi
       if ((vhost_applied)); then
-        if ! install -m 0644 -o root -g root -- "$stage/old.vhost" "$KW_SITE_VHOST" ||
-           ! nginx -t || ! systemctl restart nginx ||
-           ! systemctl is-active --quiet nginx; then
+        install -m 0644 -o root -g root -- "$stage/old.vhost" "$KW_SITE_VHOST" || rollback_ok=0
+      fi
+      if ((vhost_applied || custom_applied)); then
+        if ! nginx -t || ! systemctl restart nginx || ! systemctl is-active --quiet nginx; then
           rollback_ok=0
           kw_log ERROR "Rollback Nginx cần kiểm tra thủ công: $stage"
         fi
       fi
     fi
     if [[ -n $stage ]] && ((rollback_ok)); then
-      rm -f -- "$stage/old.pool" "$stage/old.vhost" "$stage/new.meta" "$stage/new.pool" "$stage/new.vhost"
+      rm -f -- "$stage/old.pool" "$stage/old.vhost" "$stage/old.custom" "$stage/new.meta" "$stage/new.pool" "$stage/new.vhost" "$stage/new.custom"
       rmdir -- "$stage" || true
     fi
   ' EXIT
@@ -327,6 +355,17 @@ kw_config_restore_locked() (
   tar -xOzf "$KW_BACKUP_ROOT/$name" site.meta > "$stage/new.meta" || return 1
   tar -xOzf "$KW_BACKUP_ROOT/$name" pool.conf > "$stage/new.pool" || return 1
   tar -xOzf "$KW_BACKUP_ROOT/$name" vhost.conf > "$stage/new.vhost" || return 1
+  listing=$(tar -tzf "$KW_BACKUP_ROOT/$name") || return 2
+  if [[ $listing == *$'\ncustom.conf'* ]]; then
+    tar -xOzf "$KW_BACKUP_ROOT/$name" custom.conf > "$stage/new.custom" || return 1
+    kw_nginx_custom_file_safe "$stage/new.custom" &&
+      kw_nginx_custom_directives_safe "$stage/new.custom" || return 2
+    grep -Fxq "  include /etc/nginx/kwvps-custom/$id/*.conf;" "$stage/new.vhost" || return 2
+  elif [[ -f $KW_SITE_CUSTOM ]] &&
+       ! grep -Fxq "  include /etc/nginx/kwvps-custom/$id/*.conf;" "$stage/new.vhost"; then
+    kw_log ERROR 'Backup vhost cũ không include snippet hiện tại; tránh làm mất cấu hình tùy chỉnh.'
+    return 2
+  fi
   if [[ -f $KW_BACKUP_ROOT/$name.cf.enc ]]; then
     if ! kw_config_secret_password_valid "$password" || ! kw_has openssl; then
       kw_log ERROR 'Backup Cloudflare cần mật khẩu mã hóa và openssl.'; return 2;
@@ -360,7 +399,17 @@ kw_config_restore_locked() (
   }
   cmp -s -- "$KW_SITE_POOL" "$stage/new.pool" || pool_changed=1
   cmp -s -- "$KW_SITE_VHOST" "$stage/new.vhost" || vhost_changed=1
-  if [[ -z $secret_zone ]] && ((pool_changed == 0 && vhost_changed == 0)); then
+  if [[ -f $stage/new.custom ]]; then
+    if [[ -e $KW_SITE_CUSTOM || -L $KW_SITE_CUSTOM ]]; then
+      kw_nginx_custom_file_safe "$KW_SITE_CUSTOM" || return 2
+      custom_existed=1
+      install -m 0600 -o root -g root -- "$KW_SITE_CUSTOM" "$stage/old.custom" || return 1
+      cmp -s -- "$KW_SITE_CUSTOM" "$stage/new.custom" || custom_changed=1
+    else
+      custom_changed=1
+    fi
+  fi
+  if [[ -z $secret_zone ]] && ((pool_changed == 0 && vhost_changed == 0 && custom_changed == 0)); then
     printf 'Cấu hình hiện tại đã khớp backup; không thay đổi.\n'; return 0
   fi
   kw_config_backup_locked "$domain" "$password" || return 1
@@ -376,13 +425,24 @@ kw_config_restore_locked() (
     # shellcheck disable=SC2034 # A failed install may partially overwrite the vhost.
     vhost_applied=1
     install -m 0644 -o root -g root -- "$stage/new.vhost" "$KW_SITE_VHOST" || return 1
-    nginx -t || return 1
   fi
+  if ((custom_changed)); then
+    [[ ! -e /etc/nginx/kwvps-custom && ! -L /etc/nginx/kwvps-custom ]] ||
+      [[ -d /etc/nginx/kwvps-custom && ! -L /etc/nginx/kwvps-custom &&
+         $(stat -c %u:%a -- /etc/nginx/kwvps-custom) == 0:755 ]] || return 2
+    [[ ! -e $KW_SITE_CUSTOM_DIR && ! -L $KW_SITE_CUSTOM_DIR ]] ||
+      [[ -d $KW_SITE_CUSTOM_DIR && ! -L $KW_SITE_CUSTOM_DIR &&
+         $(stat -c %u:%a -- "$KW_SITE_CUSTOM_DIR") == 0:755 ]] || return 2
+    install -d -m 0755 -o root -g root -- /etc/nginx/kwvps-custom "$KW_SITE_CUSTOM_DIR" || return 1
+    custom_applied=1
+    install -m 0644 -o root -g root -- "$stage/new.custom" "$KW_SITE_CUSTOM" || return 1
+  fi
+  if ((vhost_changed || custom_changed)); then nginx -t || return 1; fi
   if ((pool_changed)); then
     systemctl restart "php${KW_SITE_PHP}-fpm" || return 1
     systemctl is-active --quiet "php${KW_SITE_PHP}-fpm" || return 1
   fi
-  if ((vhost_changed)); then
+  if ((vhost_changed || custom_changed)); then
     systemctl restart nginx || return 1
     systemctl is-active --quiet nginx || return 1
   fi
@@ -400,7 +460,7 @@ kw_config_restore_locked() (
   fi
   # shellcheck disable=SC2034 # Read by the EXIT rollback trap.
   committed=1
-  printf 'Đã khôi phục pool, vhost và Cloudflare zone/token nếu có của %s từ %s. Metadata/SSL/source/DB không thay đổi.\n' "$domain" "$name"
+  printf 'Đã khôi phục pool, vhost/snippet và Cloudflare zone/token nếu có của %s từ %s. Metadata/SSL/source/DB không thay đổi.\n' "$domain" "$name"
 )
 
 kw_config_restore() (

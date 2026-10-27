@@ -72,7 +72,7 @@ output=$(kw_catalog firewall)
 assert grep -Fq 'Bật Firewall UFW|fw-enable' <<< "$output"
 assert grep -Fq 'Tắt Firewall UFW|fw-disable' <<< "$output"
 output=$(kw_catalog nginx)
-assert grep -Fq 'Sửa vhost theo domain (nano)|nginx-vhost-custom' <<< "$output"
+assert grep -Fq 'Sửa cấu hình riêng theo domain (nano)|nginx-vhost-custom' <<< "$output"
 output=$(kw_catalog sites)
 assert grep -Fq 'Laravel theo site|@laravel' <<< "$output"
 output=$(kw_catalog laravel)
@@ -197,6 +197,44 @@ assert_tunnel_realip_overlay_fixture() (
   if kw_cf_realip_vhost_overlay tunnel example.com examplecom "$stage/https-tunnel" >/dev/null 2>&1; then return 1; fi
 )
 assert assert_tunnel_realip_overlay_fixture
+assert_custom_vhost_fixture() (
+  local stage kind
+  stage=$(mktemp -d) || return 1
+  trap 'rm -f -- "$stage"/*; rmdir -- "$stage"' EXIT
+  for kind in http letsencrypt laravel; do
+    case "$kind" in
+      http) kw_site_render_vhost example.com examplecom > "$stage/vhost" ;;
+      letsencrypt) kw_ssl_render_vhost example.com examplecom > "$stage/vhost" ;;
+      laravel) kw_laravel_render_vhost http example.com examplecom > "$stage/vhost" ;;
+    esac
+    [[ $(grep -Fc 'include /etc/nginx/kwvps-custom/examplecom/*.conf;' "$stage/vhost") == 1 ]] || return 1
+    case "$kind" in
+      http) kw_site_vhost_matches "$stage/vhost" example.com examplecom kw_site_render_vhost example.com examplecom || return 1 ;;
+      letsencrypt) kw_site_vhost_matches "$stage/vhost" example.com examplecom kw_ssl_render_vhost example.com examplecom || return 1 ;;
+      laravel) kw_site_vhost_matches "$stage/vhost" example.com examplecom kw_laravel_render_vhost http example.com examplecom || return 1 ;;
+    esac
+    sed -i '/include \/etc\/nginx\/kwvps-custom\/examplecom\/\*\.conf;/d' "$stage/vhost"
+    case "$kind" in
+      http) kw_site_vhost_matches "$stage/vhost" example.com examplecom kw_site_render_vhost example.com examplecom || return 1 ;;
+      letsencrypt) kw_site_vhost_matches "$stage/vhost" example.com examplecom kw_ssl_render_vhost example.com examplecom || return 1 ;;
+      laravel) kw_site_vhost_matches "$stage/vhost" example.com examplecom kw_laravel_render_vhost http example.com examplecom || return 1 ;;
+    esac
+  done
+  printf '%s\n' 'client_max_body_size 64m;' > "$stage/custom"
+  kw_nginx_custom_directives_safe "$stage/custom" || return 1
+  printf '%s\n' 'server_name' >> "$stage/custom"
+  ! kw_nginx_custom_directives_safe "$stage/custom" || return 1
+  kw_site_render_vhost example.com examplecom > "$stage/vhost"
+  sed -i '/^  location \/ {/i\  add_header X-Migrated yes;' "$stage/vhost"
+  KW_SITE_VHOST="$stage/vhost"
+  KW_SITE_PUBLIC=/var/www/kwvps/examplecom/public
+  KW_SITE_SOCKET=/run/php/kwvps-examplecom.sock
+  kw_cf_realip_render_for_site() { cat; }
+  kw_nginx_custom_migration_render example.com examplecom > "$stage/migrated" || return 1
+  cmp -s -- "$stage/migrated" <(kw_site_render_vhost example.com examplecom) || return 1
+  ! grep -Fq 'X-Migrated' "$stage/migrated" || return 1
+)
+assert assert_custom_vhost_fixture
 output=$(
   temporary_vhost=$(mktemp)
   trap 'rm -f -- "$temporary_vhost"' EXIT
