@@ -170,6 +170,7 @@ setup() {
   run kw_laravel_deploy_confirm example.com auto 1
   [ "$status" -eq 0 ]
   [[ "$output" == *'ACTION:deploy example.com auto 1'* ]]
+  [[ "$output" == *'reload PHP-FPM của phiên bản site'* ]]
   [[ "$output" == *'rollback code không phục hồi database'* ]]
   run kw_laravel_deploy_confirm example.com auto 0
   [ "$status" -eq 0 ]
@@ -188,6 +189,31 @@ setup() {
   run kw_laravel_run_migrations kwexamplecom 8.3 /site/deploy/releases/new
   [ "$status" -eq 1 ]
   [[ "$output" == *'Database có thể đã thay đổi một phần'* ]]
+}
+
+@test "Laravel deploy reloads the selected PHP-FPM version after syntax check" {
+  php-fpm8.3() { printf 'CHECK:%s\n' "$*" >> "$BATS_TEST_TMPDIR/reload-events"; }
+  systemctl() { printf 'SERVICE:%s\n' "$*" >> "$BATS_TEST_TMPDIR/reload-events"; }
+  run kw_laravel_php_reload_checked 8.3
+  [ "$status" -eq 0 ]
+  [ "$(< "$BATS_TEST_TMPDIR/reload-events")" = $'CHECK:-t\nSERVICE:reload php8.3-fpm\nSERVICE:is-active --quiet php8.3-fpm' ]
+  [[ "$output" == *'site cùng phiên bản PHP'* ]]
+}
+
+@test "Laravel deploy skips PHP-FPM reload when syntax fails" {
+  php-fpm8.3() { return 1; }
+  systemctl() { printf 'UNEXPECTED_RELOAD\n'; }
+  run kw_laravel_php_reload_checked 8.3
+  [ "$status" -eq 1 ]
+  [[ "$output" != *'UNEXPECTED_RELOAD'* ]]
+}
+
+@test "Laravel deploy treats an inactive PHP-FPM service as failure" {
+  php-fpm8.4() { :; }
+  systemctl() { [[ $1 != is-active ]]; }
+  run kw_laravel_php_reload_checked 8.4
+  [ "$status" -eq 1 ]
+  [[ "$output" == *'không active sau reload'* ]]
 }
 
 @test "Laravel vhost keeps HTTP-01 on original public while serving current release" {

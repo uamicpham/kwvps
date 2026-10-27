@@ -1024,15 +1024,37 @@ kw_laravel_run_migrations() {
   fi
 }
 
+# PHP-FPM is shared by all sites on the same PHP version. Reload it after the
+# new release passes its first HTTP check, then probe HTTP again with fresh
+# workers so a stale OPcache result cannot mark the deploy successful.
+kw_laravel_php_reload_checked() {
+  local php=$1 unit
+  kw_site_php_valid "$php" || return 2
+  unit="php${php}-fpm"
+  if ! "php-fpm${php}" -t; then
+    kw_log ERROR "Cấu hình $unit không hợp lệ; chưa reload PHP-FPM."
+    return 1
+  fi
+  if ! systemctl reload "$unit"; then
+    kw_log ERROR "Không reload được $unit; release sẽ được hoàn tác."
+    return 1
+  fi
+  if ! systemctl is-active --quiet "$unit"; then
+    kw_log ERROR "$unit không active sau reload; release sẽ được hoàn tác."
+    return 1
+  fi
+  printf 'Đã reload %s và xác nhận dịch vụ active. Các site cùng phiên bản PHP dùng chung dịch vụ này.\n' "$unit"
+}
+
 kw_laravel_deploy_locked() (
   local domain=$1 frontend=${2:-auto} migrate=${3:-0} id source deploy releases shared owner php commit short stamp stage='' release='' archive='' changes command lock_count=0 \
-    current next='' previous='' kind first vhost_backup='' vhost_temp='' activated=0 success=0 migration_attempted=0
+    current next='' previous='' kind first vhost_backup='' vhost_temp='' activated=0 success=0 migration_attempted=0 reload_attempted=0
   # All paths below are absolute. Site-user commands must not inherit /root.
   cd -- / || return 1
   kw_laravel_frontend_valid "$frontend" && kw_laravel_migrate_valid "$migrate" || return 2
   kw_laravel_layout_ready "$domain" && kw_laravel_git_source || return 2
   kw_nginx_ready || return 2
-  for command in git tar composer curl runuser "php$KW_SITE_PHP"; do
+  for command in git tar composer curl runuser "php$KW_SITE_PHP" "php-fpm$KW_SITE_PHP"; do
     kw_has "$command" || { kw_log ERROR "Thiếu $command; chưa đổi website. Cài công cụ này trước."; return 2; }
   done
   id=${KW_SITE_OWNER#kw}; source=$KW_SITE_ROOT/source; deploy=$KW_SITE_ROOT/deploy
@@ -1159,7 +1181,7 @@ kw_laravel_deploy_locked() (
       kw_cf_realip_render_for_site "$domain" "$id" > "$vhost_temp" || return 1
     chmod 0644 -- "$vhost_temp" || return 1
   fi
-  trap 'if ((!success && migration_attempted)); then kw_log WARN "Migration có thể đã thay đổi database; rollback release không hoàn tác dữ liệu."; fi; if ((activated && ! success)); then if [[ -n $previous ]]; then ln -sfn -- "$previous" "$next" && mv -Tf -- "$next" "$current" || kw_log ERROR "Không thể quay lại release cũ: $current"; else rm -f -- "$current" || kw_log ERROR "Không thể bỏ current: $current"; fi; if [[ -n $vhost_backup ]]; then install -m 0644 -o root -g root -- "$vhost_backup" "$KW_SITE_VHOST" || kw_log ERROR "Cần phục hồi vhost từ $vhost_backup"; fi; kw_nginx_test_restart || kw_log ERROR "Cần kiểm tra Nginx sau rollback: $domain"; fi; [[ -z $vhost_temp ]] || rm -f -- "$vhost_temp"; [[ -z $next ]] || rm -f -- "$next"' EXIT
+  trap 'if ((!success && migration_attempted)); then kw_log WARN "Migration có thể đã thay đổi database; rollback release không hoàn tác dữ liệu."; fi; if ((activated && ! success)); then if [[ -n $previous ]]; then ln -sfn -- "$previous" "$next" && mv -Tf -- "$next" "$current" || kw_log ERROR "Không thể quay lại release cũ: $current"; else rm -f -- "$current" || kw_log ERROR "Không thể bỏ current: $current"; fi; if [[ -n $vhost_backup ]]; then install -m 0644 -o root -g root -- "$vhost_backup" "$KW_SITE_VHOST" || kw_log ERROR "Cần phục hồi vhost từ $vhost_backup"; fi; kw_nginx_test_restart || kw_log ERROR "Cần kiểm tra Nginx sau rollback: $domain"; if ((reload_attempted)); then kw_laravel_php_reload_checked "$php" || kw_log ERROR "Cần kiểm tra $php-FPM sau rollback: $domain"; fi; fi; [[ -z $vhost_temp ]] || rm -f -- "$vhost_temp"; [[ -z $next ]] || rm -f -- "$next"' EXIT
   if ((migrate)); then
     # shellcheck disable=SC2034 # Read by the EXIT rollback warning trap.
     migration_attempted=1
@@ -1173,6 +1195,10 @@ kw_laravel_deploy_locked() (
     vhost_temp=''
   fi
   kw_nginx_test_restart || return 1
+  kw_laravel_health "$domain" "$kind" || return 1
+  # shellcheck disable=SC2034 # EXIT rollback trap may reload old workers.
+  reload_attempted=1
+  kw_laravel_php_reload_checked "$php" || return 1
   kw_laravel_health "$domain" "$kind" || return 1
   # shellcheck disable=SC2034 # Read by the EXIT rollback trap.
   success=1
@@ -1209,7 +1235,8 @@ kw_laravel_deploy_confirm() {
     none) frontend_note='bỏ qua build frontend' ;;
     *) frontend_note="build frontend bằng $frontend" ;;
   esac
-  printf 'Deploy %s: pull nhánh hiện tại, chạy Composer, %s, tạo release, kiểm tra Nginx/HTTP.\n' "$domain" "$frontend_note"
+  printf 'Deploy %s: pull nhánh hiện tại, chạy Composer, %s, tạo release, kiểm tra Nginx/HTTP, reload PHP-FPM của phiên bản site rồi thử HTTP lần nữa.\n' "$domain" "$frontend_note"
+  printf 'PHP-FPM dùng chung theo phiên bản; reload có thể ảnh hưởng ngắn các site khác đang dùng cùng PHP.\n'
   if ((migrate)); then
     printf 'Có chạy php artisan migrate --force trên release mới trước khi đổi current.\n'
     printf 'CẢNH BÁO: migration có thể không đảo ngược; rollback code không phục hồi database. Hãy backup DB trước.\n'

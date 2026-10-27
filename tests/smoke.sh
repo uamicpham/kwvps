@@ -547,6 +547,7 @@ output=$(
   kw_laravel_deploy_confirm example.com auto 1
 )
 assert test "${output#*'ACTION:deploy example.com auto 1'}" != "$output"
+assert test "${output#*'reload PHP-FPM của phiên bản site'}" != "$output"
 assert test "${output#*'rollback code không phục hồi database'}" != "$output"
 output=$(
   runuser() { printf 'RUN:%s\n' "$*"; }
@@ -558,4 +559,20 @@ kw_laravel_migrate_failure_fixture() (
   kw_laravel_run_migrations kwexamplecom 8.3 /site/deploy/releases/new >/dev/null 2>&1
 )
 reject kw_laravel_migrate_failure_fixture
+kw_laravel_php_reload_fixture() (
+  local events
+  events=$(mktemp) || return 1
+  trap 'rm -f -- "$events"' EXIT
+  # shellcheck disable=SC2329 # Invoked dynamically by the PHP version under test.
+  php-fpm8.3() { printf 'CHECK:%s\n' "$*" >> "$events"; }
+  systemctl() { printf 'SERVICE:%s\n' "$*" >> "$events"; }
+  kw_laravel_php_reload_checked 8.3 >/dev/null || return 1
+  [[ $(< "$events") == $'CHECK:-t\nSERVICE:reload php8.3-fpm\nSERVICE:is-active --quiet php8.3-fpm' ]] || return 1
+  : > "$events"
+  # shellcheck disable=SC2329 # Overrides the same dynamic PHP-FPM command.
+  php-fpm8.3() { return 1; }
+  kw_laravel_php_reload_checked 8.3 >/dev/null 2>&1 && return 1
+  [[ ! -s $events ]]
+)
+assert kw_laravel_php_reload_fixture
 printf 'PASS: %d checks\n' "$tests"
