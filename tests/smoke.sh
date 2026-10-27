@@ -210,6 +210,20 @@ output=$(
   printf '%s/%s' "$KW_LARAVEL_VHOST_KIND" "$KW_LARAVEL_FIRST"
 )
 assert test "$output" = 'letsencrypt/0'
+assert_rename_laravel_http_fixture() (
+  local stage kind
+  stage=$(mktemp -d) || return 1
+  trap 'rm -f -- "$stage"/*; rmdir -- "$stage"' EXIT
+  kw_laravel_render_vhost http old.example.com oldexamplecom > "$stage/old" || return 1
+  kind=$(kw_site_rename_vhost_kind "$stage/old" old.example.com oldexamplecom) || return 1
+  [[ $kind == laravel-http ]] || return 1
+  kw_site_rename_render_vhost "$kind" new.example.com newexamplecom > "$stage/new" || return 1
+  kw_site_vhost_matches "$stage/new" new.example.com newexamplecom \
+    kw_laravel_render_vhost http new.example.com newexamplecom || return 1
+  grep -Fq 'root /var/www/kwvps/newexamplecom/deploy/current/public;' "$stage/new" || return 1
+  ! grep -Fq 'oldexamplecom' "$stage/new" || return 1
+)
+assert assert_rename_laravel_http_fixture
 output=$(
   kw_site_lookup() { KW_SITE_ROOT=/var/www/kwvps/examplecom; KW_SITE_OWNER=kwexamplecom; }
   kw_site_laravel_plan example.com

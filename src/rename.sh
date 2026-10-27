@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Rename a pristine HTTP site while preserving its source and numeric UID/GID.
+# Rename a managed HTTP site while preserving its source and numeric UID/GID.
 # External DNS, application URLs, certificates and independent backups are not rewritten.
 
 kw_site_rename_plan() {
@@ -11,7 +11,7 @@ kw_site_rename_plan() {
   [[ $old_id != "$new_id" ]] || return 2
   printf 'Đổi domain %s → %s (PHP %s).\n' "$old" "$new" "$php"
   printf 'Site ID/user: %s → %s. Source, pool, socket, vhost và metadata sẽ chuyển theo ID mới.\n' "$old_id" "$new_id"
-  printf 'Chỉ hỗ trợ vhost HTTP nguyên bản. Nhãn ingress/Real IP Tunnel và Nginx rate limit local (nếu có) sẽ chuyển theo tên miền; route Tunnel/DNS bên ngoài, SSL, URL ứng dụng, cron và backup độc lập không tự đổi.\n'
+  printf 'Hỗ trợ vhost HTTP mẫu và Laravel release do KwVPS tạo. Nhãn ingress/Real IP Tunnel và Nginx rate limit local (nếu có) sẽ chuyển theo tên miền; route Tunnel/DNS bên ngoài, SSL, URL ứng dụng, cron và backup độc lập không tự đổi.\n'
   local ingress_mode
   ingress_mode=$(kw_tunnel_site_mode "$old") || return 2
   if [[ $ingress_mode != dns ]]; then
@@ -33,8 +33,30 @@ kw_site_rename_plan() {
   printf 'Có thể gián đoạn HTTP/PHP ngắn trong lúc đổi. Bản cấu hình cũ được giữ root-only.\n'
 }
 
+# Identify only complete KwVPS HTTP templates. A manually edited vhost or a
+# TLS/cache variant must be reviewed separately instead of silently replaced.
+kw_site_rename_vhost_kind() {
+  local file=$1 domain=$2 id=$3
+  if kw_site_vhost_matches "$file" "$domain" "$id" kw_site_render_vhost "$domain" "$id"; then
+    printf 'http\n'
+  elif kw_site_vhost_matches "$file" "$domain" "$id" kw_laravel_render_vhost http "$domain" "$id"; then
+    printf 'laravel-http\n'
+  else
+    return 2
+  fi
+}
+
+kw_site_rename_render_vhost() {
+  local kind=$1 domain=$2 id=$3
+  case "$kind" in
+    http) kw_site_render_vhost "$domain" "$id" ;;
+    laravel-http) kw_laravel_render_vhost http "$domain" "$id" ;;
+    *) return 2 ;;
+  esac
+}
+
 kw_site_rename_preflight() {
-  local old=$1 new=$2 old_id new_id old_owner old_root old_pool old_vhost old_meta old_link php file name zone_cache site_token rate_state digest root_cron cron_status=0 ingress ingress_file new_ingress_file old_local_rate new_local_rate rate_value
+  local old=$1 new=$2 old_id new_id old_owner old_root old_pool old_vhost old_meta old_link php file name zone_cache site_token rate_state digest root_cron cron_status=0 ingress ingress_file new_ingress_file old_local_rate new_local_rate rate_value vhost_kind current_target
   ((EUID == 0)) && kw_os_supported '' || return 2
   [[ -f /etc/kwvps/install-id && ! -L /etc/kwvps/install-id && $(< /etc/kwvps/install-id) == kwvps-v1 ]] || return 2
   kw_site_lookup "$old" || return 2
@@ -107,9 +129,22 @@ kw_site_rename_preflight() {
     kw_log ERROR 'Root cron có tham chiếu site cũ; cần chỉnh cron có kiểm soát trước khi đổi tên.'
     return 2
   fi
-  kw_site_vhost_matches "$old_vhost" "$old" "$old_id" kw_site_render_vhost "$old" "$old_id" || {
-    kw_log ERROR 'Đổi tên chỉ hỗ trợ vhost HTTP nguyên bản; không đụng SSL/cấu hình tùy biến.'; return 2;
+  vhost_kind=$(kw_site_rename_vhost_kind "$old_vhost" "$old" "$old_id") || {
+    kw_log ERROR 'Đổi tên chỉ hỗ trợ vhost HTTP mẫu hoặc Laravel release do KwVPS tạo; không đụng SSL/cache/cấu hình tùy biến.'; return 2;
   }
+  if [[ $vhost_kind == laravel-http ]]; then
+    kw_laravel_layout_ready "$old" || return 2
+    [[ -L $old_root/deploy/current ]] || {
+      kw_log ERROR 'Laravel release thiếu deploy/current; chưa đổi tên.'; return 2;
+    }
+    current_target=$(readlink -- "$old_root/deploy/current") || return 2
+    [[ $current_target == releases/* && $current_target != *..* &&
+       -d $old_root/deploy/$current_target && ! -L $old_root/deploy/$current_target &&
+       $(stat -c %U -- "$old_root/deploy/$current_target") == "$old_owner" &&
+       -d $old_root/deploy/$current_target/public && ! -L $old_root/deploy/$current_target/public ]] || {
+      kw_log ERROR 'Laravel deploy/current không trỏ tới release hợp lệ; chưa đổi tên.'; return 2;
+    }
+  fi
   if [[ $ingress == tunnel ]]; then
     kw_cf_realip_public_config_valid || return 2
     grep -Fq '# KwVPS Tunnel Real IP (managed)' "$old_vhost" || {
@@ -210,7 +245,7 @@ kw_site_rename_rollback() {
 }
 
 kw_site_rename_locked() (
-  local old=$1 new=$2 old_id new_id file name temp
+  local old=$1 new=$2 old_id new_id file name temp vhost_kind
   # shellcheck disable=SC2034 # Rollback trap reads these variables.
   local KW_RENAME_DONE=0 KW_RENAME_USER=0 KW_RENAME_GROUP=0 KW_RENAME_HOME=0
   # shellcheck disable=SC2034 # Rollback trap reads these mutation markers.
@@ -226,6 +261,7 @@ kw_site_rename_locked() (
   kw_site_rename_preflight "$old" "$new" || return 2
   kw_site_lookup "$old" || return 2
   old_id=${KW_SITE_OWNER#kw}; KW_RENAME_PHP=$KW_SITE_PHP
+  vhost_kind=$(kw_site_rename_vhost_kind "$KW_SITE_VHOST" "$old" "$old_id") || return 2
   KW_RENAME_OLD_OWNER=$KW_SITE_OWNER; KW_RENAME_OLD_ROOT=$KW_SITE_ROOT
   KW_RENAME_OLD_POOL=$KW_SITE_POOL; KW_RENAME_OLD_VHOST=$KW_SITE_VHOST
   KW_RENAME_OLD_META=$KW_SITE_META; KW_RENAME_OLD_LINK=$KW_SITE_ENABLED
@@ -243,10 +279,10 @@ kw_site_rename_locked() (
   trap kw_site_rename_rollback EXIT
   kw_site_render_pool "$new_id" "$KW_RENAME_NEW_OWNER" > "$KW_RENAME_STAGE/new-pool" || return 1
   if [[ $(kw_tunnel_site_mode "$old") == tunnel ]]; then
-    kw_site_render_vhost "$new" "$new_id" |
+    kw_site_rename_render_vhost "$vhost_kind" "$new" "$new_id" |
       kw_cf_realip_vhost_overlay tunnel "$new" "$new_id" > "$KW_RENAME_STAGE/new-vhost" || return 1
   else
-    kw_site_render_vhost "$new" "$new_id" > "$KW_RENAME_STAGE/new-vhost" || return 1
+    kw_site_rename_render_vhost "$vhost_kind" "$new" "$new_id" > "$KW_RENAME_STAGE/new-vhost" || return 1
   fi
   printf 'domain=%s\nsite_id=%s\nphp_version=%s\nowner=%s\n' \
     "$new" "$new_id" "$KW_RENAME_PHP" "$KW_RENAME_NEW_OWNER" > "$KW_RENAME_STAGE/new-meta" || return 1
@@ -321,7 +357,11 @@ kw_site_rename_locked() (
   systemctl is-active --quiet "php${KW_RENAME_PHP}-fpm" || return 1
   systemctl restart nginx || return 1
   systemctl is-active --quiet nginx || return 1
-  curl --fail --silent --show-error --noproxy '*' --max-time 8 -H "Host: $new" http://127.0.0.1/ >/dev/null || return 1
+  if [[ $vhost_kind == laravel-http ]]; then
+    kw_laravel_health "$new" http || return 1
+  else
+    curl --fail --silent --show-error --noproxy '*' --max-time 8 -H "Host: $new" http://127.0.0.1/ >/dev/null || return 1
+  fi
   kw_site_lookup "$new" || return 1
   [[ $KW_SITE_OWNER == "$KW_RENAME_NEW_OWNER" ]] || return 1
   # shellcheck disable=SC2034 # Read by EXIT rollback trap.
