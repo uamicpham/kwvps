@@ -771,9 +771,11 @@ kw_laravel_site_git() {
     }
     mode=$(stat -c %a -- "$KW_SITE_ROOT/.ssh") || return 2
     key_mode=$(stat -c %a -- "$private") || return 2
-    [[ $mode =~ ^[0-7]{3,4}$ && $key_mode =~ ^[0-7]{3,4}$ ]] &&
-      (( (8#$mode & 0077) == 0 && (8#$key_mode & 0177) == 0 &&
-         (8#$key_mode & 0400) != 0 )) || return 2
+    if [[ ! $mode =~ ^[0-7]{3,4}$ || ! $key_mode =~ ^[0-7]{3,4}$ ]] ||
+       (( (8#$mode & 0077) != 0 || (8#$key_mode & 0177) != 0 ||
+          (8#$key_mode & 0400) == 0 )); then
+      return 2
+    fi
     runuser -u "$owner" -- env \
       GIT_SSH_COMMAND="ssh -i $private -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes" \
       git "$@"
