@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Shared primitives. No writes, network access, eval, or automatic sudo.
-readonly KW_VERSION='0.50.21-dev'
+readonly KW_VERSION='0.50.21'
 KW_PREVIEW=0
 
 kw_log() {
