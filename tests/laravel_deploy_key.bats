@@ -114,6 +114,29 @@ setup() {
   [ -L "$BATS_TEST_TMPDIR/site/.ssh/id_ed25519" ]
 }
 
+@test "SSH Git operations explicitly use the site deploy key" {
+  kw_laravel_deploy_key_prepare example.com >/dev/null
+  runuser() {
+    [[ $1 == -u && $2 == "$KW_SITE_OWNER" && $3 == -- ]] || return 2
+    shift 3
+    printf '%s\n' "$@"
+  }
+  run kw_laravel_site_git "$KW_SITE_OWNER" git@github.com:example/private.git \
+    -C "$KW_SITE_ROOT/source" fetch origin main
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"GIT_SSH_COMMAND=ssh -i $KW_SITE_ROOT/.ssh/id_ed25519 -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes"* ]]
+  [[ "$output" == *'fetch'* ]]
+}
+
+@test "SSH Git refuses a missing deploy key before contacting GitHub" {
+  runuser() { printf 'UNEXPECTED_GIT\n'; }
+  run kw_laravel_site_git "$KW_SITE_OWNER" git@github.com:example/private.git \
+    -C "$KW_SITE_ROOT/source" fetch origin main
+  [ "$status" -eq 2 ]
+  [[ "$output" == *'Deploy Key riêng của site thiếu'* ]]
+  [[ "$output" != *'UNEXPECTED_GIT'* ]]
+}
+
 @test "Clone Git menu shows an SSH deploy key before cloning and permits return" {
   kw_site_prompt_domain() { KW_SITE_CHOICE=example.com; }
   kw_prompt_validated() { KW_PROMPT_VALUE=git@github.com:example/private.git; }

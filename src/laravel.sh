@@ -753,6 +753,35 @@ kw_laravel_deploy_key_prepare() {
   printf 'Private key giữ tại %s (không sao chép hoặc gửi đi).\n' "$private"
 }
 
+# Git must use the key generated for this site, even if the administrator has
+# another SSH agent or identity configured on the VPS. Never print key content.
+kw_laravel_site_git() {
+  local owner=$1 url=$2 private uid mode key_mode
+  shift 2
+  if [[ $url == git@* || $url == ssh://git@* ]]; then
+    private=$KW_SITE_ROOT/.ssh/id_ed25519
+    uid=$(id -u "$owner") || return 2
+    [[ $private =~ ^/[A-Za-z0-9._/-]+$ &&
+       -d $KW_SITE_ROOT/.ssh && ! -L $KW_SITE_ROOT/.ssh &&
+       -f $private && ! -L $private &&
+       $(stat -c %u -- "$KW_SITE_ROOT/.ssh") == "$uid" &&
+       $(stat -c %u -- "$private") == "$uid" ]] || {
+      kw_log ERROR "Deploy Key riêng của site thiếu hoặc không an toàn: $private. Mở mục Clone Git để xem/tạo public key trước."
+      return 2
+    }
+    mode=$(stat -c %a -- "$KW_SITE_ROOT/.ssh") || return 2
+    key_mode=$(stat -c %a -- "$private") || return 2
+    [[ $mode =~ ^[0-7]{3,4}$ && $key_mode =~ ^[0-7]{3,4}$ ]] &&
+      (( (8#$mode & 0077) == 0 && (8#$key_mode & 0177) == 0 &&
+         (8#$key_mode & 0400) != 0 )) || return 2
+    runuser -u "$owner" -- env \
+      GIT_SSH_COMMAND="ssh -i $private -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes" \
+      git "$@"
+  else
+    runuser -u "$owner" -- git "$@"
+  fi
+}
+
 kw_laravel_clone_locked() (
   local domain=$1 url=$2 branch=$3 source
   kw_laravel_layout_ready "$domain" || return 2
@@ -767,7 +796,7 @@ kw_laravel_clone_locked() (
     kw_log ERROR 'source/ không rỗng; không ghi đè repository đã có.'; return 2;
   }
   printf 'Đang clone nhánh %s cho %s bằng user %s...\n' "$branch" "$domain" "$KW_SITE_OWNER"
-  if ! runuser -u "$KW_SITE_OWNER" -- git clone --branch "$branch" --single-branch -- "$url" "$source"; then
+  if ! kw_laravel_site_git "$KW_SITE_OWNER" "$url" clone --branch "$branch" --single-branch -- "$url" "$source"; then
     if [[ $url == git@* || $url == ssh://git@* ]]; then
       kw_log ERROR 'Clone SSH thất bại: kiểm tra Deploy Key trong repository, quyền truy cập và host key. Vào lại mục Clone để xem cùng public key.'
     fi
@@ -793,7 +822,12 @@ kw_laravel_pull_locked() (
   }
   status=$(runuser -u "$KW_SITE_OWNER" -- git -C "$source" status --porcelain) || return 2
   [[ -z $status ]] || { kw_log ERROR 'source/ có thay đổi chưa commit; không pull đè.'; return 2; }
-  runuser -u "$KW_SITE_OWNER" -- git -C "$source" fetch --no-tags origin "$branch" || return 1
+  if ! kw_laravel_site_git "$KW_SITE_OWNER" "$origin" -C "$source" fetch --no-tags origin "$branch"; then
+    if [[ $origin == git@* || $origin == ssh://git@* ]]; then
+      kw_log ERROR "GitHub từ chối Deploy Key của user site $KW_SITE_OWNER. Kiểm tra khóa trong Settings → Deploy keys của đúng repository ($origin); mục Clone Git sẽ hiện lại public key mà không thay private key."
+    fi
+    return 1
+  fi
   runuser -u "$KW_SITE_OWNER" -- git -C "$source" merge --ff-only FETCH_HEAD || return 1
   printf 'Đã cập nhật source/ tới commit %s. Website chưa đổi cho đến khi triển khai.\n' \
     "$(runuser -u "$KW_SITE_OWNER" -- git -C "$source" rev-parse --short=12 HEAD)"
