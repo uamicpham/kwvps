@@ -2,7 +2,7 @@
 
 ## Trạng thái
 
-Ghi chú phát hành [0.50.19](RELEASE-NOTES-0.50.19.md) mô tả bản hiện tại tại `uamicpham/kwvps`. Chỉ coi một tag là bản công khai sau khi workflow tạo GitHub Release và tài sản tải về thành công. README có lệnh cài ngắn tự lấy release mới nhất và lệnh ghim tag/checksum để kiểm soát chặt hơn. VPS đã cài có thể chọn **Quản lý Update → Kiểm tra / cập nhật KwVPS**; gói được xác minh bằng SHA-256 từ GitHub API trước khi áp dụng. Bản cài mới chỉ hỗ trợ VPS Ubuntu Server 24.04 sạch, x86_64 và systemd; không cài đè LarVPS hay web stack khác.
+Nhánh `main` hiện chứa bản thử nghiệm `0.50.20-dev`; xem [ghi chú bản thử nghiệm](RELEASE-NOTES-0.50.20.md). Chỉ coi một tag là bản công khai sau khi workflow tạo GitHub Release và tài sản tải về thành công. README có lệnh cài ngắn tự lấy release mới nhất và lệnh ghim tag/checksum để kiểm soát chặt hơn. VPS đã cài có thể chọn **Quản lý Update → Kiểm tra / cập nhật KwVPS** để lấy release; gói được xác minh bằng SHA-256 từ GitHub API trước khi áp dụng. Bản thử nghiệm từ `main` cần chạy `upgrade.sh` của mã nguồn thay vì menu Update release. Bản cài mới chỉ hỗ trợ VPS Ubuntu Server 24.04 sạch, x86_64 và systemd; không cài đè LarVPS hay web stack khác.
 
 ## Chuẩn bị GitHub
 

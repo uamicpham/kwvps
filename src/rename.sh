@@ -11,7 +11,10 @@ kw_site_rename_plan() {
   [[ $old_id != "$new_id" ]] || return 2
   printf 'Đổi domain %s → %s (PHP %s).\n' "$old" "$new" "$php"
   printf 'Site ID/user: %s → %s. Source, pool, socket, vhost và metadata sẽ chuyển theo ID mới.\n' "$old_id" "$new_id"
-  printf 'Hỗ trợ vhost HTTP mẫu và Laravel release do KwVPS tạo. Nhãn ingress/Real IP Tunnel và Nginx rate limit local (nếu có) sẽ chuyển theo tên miền; route Tunnel/DNS bên ngoài, SSL, URL ứng dụng, cron và backup độc lập không tự đổi.\n'
+  printf 'Hỗ trợ vhost HTTP mẫu và Laravel release do KwVPS tạo. Nhãn ingress/Real IP Tunnel, connector/token Tunnel riêng và Nginx rate limit local (nếu có) sẽ chuyển theo tên miền; route Tunnel/DNS bên ngoài, SSL, URL ứng dụng, cron và backup độc lập không tự đổi.\n'
+  if kw_tunnel_site_connector_present "$old"; then
+    printf 'Connector Tunnel riêng sẽ đổi từ kwvps-cloudflared-%s.service sang kwvps-cloudflared-%s.service; token giữ nguyên. Bạn cần cập nhật hostname route trên Cloudflare sau đó.\n' "$old_id" "$new_id"
+  fi
   local ingress_mode
   ingress_mode=$(kw_tunnel_site_mode "$old") || return 2
   if [[ $ingress_mode != dns ]]; then
@@ -62,16 +65,26 @@ kw_site_rename_preflight() {
   kw_site_lookup "$old" || return 2
   old_id=${KW_SITE_OWNER#kw}; old_owner=$KW_SITE_OWNER; old_root=$KW_SITE_ROOT
   old_pool=$KW_SITE_POOL; old_vhost=$KW_SITE_VHOST; old_meta=$KW_SITE_META; old_link=$KW_SITE_ENABLED; php=$KW_SITE_PHP
-  if kw_tunnel_site_connector_present "$old"; then
-    kw_log ERROR 'Site còn connector/token Tunnel riêng. Chuyển route sang DNS, chọn DNS trong menu Tunnel rồi gỡ connector trước khi đổi tên.'
-    return 2
-  fi
   kw_site_new_domain_valid "$new" && [[ $old != "$new" ]] || return 2
   new_id=$(kw_site_id "$new") || return 2
   [[ $new_id != "$old_id" ]] || return 2
-  if kw_tunnel_site_connector_present "$new"; then
-    kw_log ERROR 'Domain đích còn connector/token Tunnel; từ chối ghi đè.'
+  kw_tunnel_site_paths "$new" || return 2
+  if kw_tunnel_site_connector_present "$new" ||
+     systemctl cat "$KW_TUNNEL_SITE_UNIT_NAME" >/dev/null 2>&1; then
+    kw_log ERROR 'Domain đích đã có connector/token Tunnel hoặc service trùng tên; từ chối ghi đè.'
     return 2
+  fi
+  if kw_tunnel_site_connector_present "$old"; then
+    kw_tunnel_site_service_owned "$old" && kw_tunnel_site_token_safe "$old" || {
+      kw_log ERROR 'Connector/token Tunnel của site cũ không còn đúng mẫu hoặc quyền an toàn; chưa đổi tên.'
+      return 2
+    }
+    kw_tunnel_site_paths "$old" || return 2
+    [[ $(systemctl show -p FragmentPath --value "$KW_TUNNEL_SITE_UNIT_NAME") == "$KW_TUNNEL_SITE_UNIT" &&
+       -z $(systemctl show -p DropInPaths --value "$KW_TUNNEL_SITE_UNIT_NAME") ]] || {
+      kw_log ERROR 'Service Tunnel cũ có cấu hình systemd khác mẫu; chưa tự chuyển connector.'
+      return 2
+    }
   fi
   # A rename cannot leave the old hostname in external Cloudflare rules,
   # tunnel routes, local rate states or independent backup references.
@@ -177,6 +190,66 @@ kw_site_rename_preflight() {
   nginx -t >/dev/null 2>&1 && "php-fpm${php}" -t >/dev/null 2>&1 || return 2
 }
 
+kw_site_rename_tunnel_migrate() {
+  local new=$1
+  ((KW_RENAME_TUNNEL_PRESENT)) || return 0
+  [[ -f $KW_RENAME_STAGE/tunnel-token && ! -L $KW_RENAME_STAGE/tunnel-token &&
+     -f $KW_RENAME_STAGE/new-tunnel-unit && ! -L $KW_RENAME_STAGE/new-tunnel-unit &&
+     ! -e $KW_RENAME_NEW_TUNNEL_TOKEN && ! -L $KW_RENAME_NEW_TUNNEL_TOKEN &&
+     ! -e $KW_RENAME_NEW_TUNNEL_UNIT && ! -L $KW_RENAME_NEW_TUNNEL_UNIT ]] || return 2
+  systemctl cat "$KW_RENAME_NEW_TUNNEL_SERVICE" >/dev/null 2>&1 && return 2
+  # Stop the old connector before starting another process with the same token.
+  # shellcheck disable=SC2034 # Rollback reads this marker after partial systemd changes.
+  KW_RENAME_TUNNEL_TOUCHED=1
+  systemctl disable --now "$KW_RENAME_OLD_TUNNEL_SERVICE" || return 1
+  cp -p -- "$KW_RENAME_STAGE/tunnel-token" "$KW_RENAME_NEW_TUNNEL_TOKEN" || return 1
+  cp -p -- "$KW_RENAME_STAGE/new-tunnel-unit" "$KW_RENAME_NEW_TUNNEL_UNIT" || return 1
+  systemctl daemon-reload || return 1
+  if ((KW_RENAME_TUNNEL_WAS_ENABLED)); then
+    systemctl enable "$KW_RENAME_NEW_TUNNEL_SERVICE" || return 1
+  fi
+  if ((KW_RENAME_TUNNEL_WAS_ACTIVE)); then
+    systemctl start "$KW_RENAME_NEW_TUNNEL_SERVICE" || return 1
+    sleep 3
+    systemctl is-active --quiet "$KW_RENAME_NEW_TUNNEL_SERVICE" || return 1
+  fi
+  rm -f -- "$KW_RENAME_OLD_TUNNEL_UNIT" "$KW_RENAME_OLD_TUNNEL_TOKEN" || return 1
+  systemctl daemon-reload || return 1
+  kw_tunnel_site_service_owned "$new" && kw_tunnel_site_token_safe "$new" || return 1
+  [[ ! -e $KW_RENAME_OLD_TUNNEL_UNIT && ! -L $KW_RENAME_OLD_TUNNEL_UNIT &&
+     ! -e $KW_RENAME_OLD_TUNNEL_TOKEN && ! -L $KW_RENAME_OLD_TUNNEL_TOKEN ]] || return 1
+  printf 'Đã chuyển connector Tunnel sang %s; giữ nguyên token và trạng thái service.\n' \
+    "$KW_RENAME_NEW_TUNNEL_SERVICE"
+}
+
+kw_site_rename_tunnel_rollback() {
+  ((KW_RENAME_TUNNEL_TOUCHED)) || return 0
+  systemctl disable --now "$KW_RENAME_NEW_TUNNEL_SERVICE" >/dev/null 2>&1 || true
+  if [[ -e $KW_RENAME_NEW_TUNNEL_UNIT || -L $KW_RENAME_NEW_TUNNEL_UNIT ]]; then
+    rm -f -- "$KW_RENAME_NEW_TUNNEL_UNIT" || kw_log ERROR 'Cần gỡ service Tunnel mới sau rollback.'
+  fi
+  if [[ -e $KW_RENAME_NEW_TUNNEL_TOKEN || -L $KW_RENAME_NEW_TUNNEL_TOKEN ]]; then
+    rm -f -- "$KW_RENAME_NEW_TUNNEL_TOKEN" || kw_log ERROR 'Cần gỡ token Tunnel mới sau rollback.'
+  fi
+  cp -p -- "$KW_RENAME_STAGE/tunnel-unit" "$KW_RENAME_OLD_TUNNEL_UNIT" ||
+    kw_log ERROR 'Cần khôi phục service Tunnel cũ sau rollback.'
+  cp -p -- "$KW_RENAME_STAGE/tunnel-token" "$KW_RENAME_OLD_TUNNEL_TOKEN" ||
+    kw_log ERROR 'Cần khôi phục token Tunnel cũ sau rollback.'
+  systemctl daemon-reload || kw_log ERROR 'Cần reload systemd sau rollback Tunnel.'
+  if ((KW_RENAME_TUNNEL_WAS_ENABLED)); then
+    systemctl enable "$KW_RENAME_OLD_TUNNEL_SERVICE" >/dev/null ||
+      kw_log ERROR 'Cần bật lại service Tunnel cũ sau rollback.'
+  else
+    systemctl disable "$KW_RENAME_OLD_TUNNEL_SERVICE" >/dev/null 2>&1 || true
+  fi
+  if ((KW_RENAME_TUNNEL_WAS_ACTIVE)); then
+    systemctl restart "$KW_RENAME_OLD_TUNNEL_SERVICE" ||
+      kw_log ERROR 'Cần khởi động lại connector Tunnel cũ sau rollback.'
+  else
+    systemctl stop "$KW_RENAME_OLD_TUNNEL_SERVICE" >/dev/null 2>&1 || true
+  fi
+}
+
 kw_site_rename_rollback() {
   ((KW_RENAME_DONE == 0)) || return 0
   local file name
@@ -241,6 +314,7 @@ kw_site_rename_rollback() {
       kw_log ERROR 'Cần kiểm tra Nginx sau rollback đổi tên.'
     fi
   fi
+  kw_site_rename_tunnel_rollback
   kw_log WARN "Giữ bản cấu hình cũ tại $KW_RENAME_STAGE để kiểm tra."
 }
 
@@ -258,6 +332,12 @@ kw_site_rename_locked() (
   local KW_RENAME_NEW_INGRESS="/etc/kwvps/ingress/$new.mode"
   local KW_RENAME_OLD_RATE="/etc/kwvps/cloudflare/antiddos/$old.rate"
   local KW_RENAME_NEW_RATE="/etc/kwvps/cloudflare/antiddos/$new.rate"
+  # shellcheck disable=SC2034 # Tunnel migration/rollback helpers read these state markers.
+  local KW_RENAME_TUNNEL_PRESENT=0 KW_RENAME_TUNNEL_TOUCHED=0
+  local KW_RENAME_TUNNEL_WAS_ACTIVE=0 KW_RENAME_TUNNEL_WAS_ENABLED=0
+  local KW_RENAME_OLD_TUNNEL_UNIT='' KW_RENAME_NEW_TUNNEL_UNIT=''
+  local KW_RENAME_OLD_TUNNEL_TOKEN='' KW_RENAME_NEW_TUNNEL_TOKEN=''
+  local KW_RENAME_OLD_TUNNEL_SERVICE='' KW_RENAME_NEW_TUNNEL_SERVICE=''
   kw_site_rename_preflight "$old" "$new" || return 2
   kw_site_lookup "$old" || return 2
   old_id=${KW_SITE_OWNER#kw}; KW_RENAME_PHP=$KW_SITE_PHP
@@ -270,6 +350,19 @@ kw_site_rename_locked() (
   KW_RENAME_NEW_OWNER=$KW_SITE_OWNER; KW_RENAME_NEW_ROOT=$KW_SITE_ROOT
   KW_RENAME_NEW_POOL=$KW_SITE_POOL; KW_RENAME_NEW_VHOST=$KW_SITE_VHOST
   KW_RENAME_NEW_META=$KW_SITE_META; KW_RENAME_NEW_LINK=$KW_SITE_ENABLED
+  if kw_tunnel_site_connector_present "$old"; then
+    KW_RENAME_TUNNEL_PRESENT=1
+    kw_tunnel_site_paths "$old" || return 2
+    KW_RENAME_OLD_TUNNEL_UNIT=$KW_TUNNEL_SITE_UNIT
+    KW_RENAME_OLD_TUNNEL_TOKEN=$KW_TUNNEL_SITE_TOKEN
+    KW_RENAME_OLD_TUNNEL_SERVICE=$KW_TUNNEL_SITE_UNIT_NAME
+    kw_tunnel_site_paths "$new" || return 2
+    KW_RENAME_NEW_TUNNEL_UNIT=$KW_TUNNEL_SITE_UNIT
+    KW_RENAME_NEW_TUNNEL_TOKEN=$KW_TUNNEL_SITE_TOKEN
+    KW_RENAME_NEW_TUNNEL_SERVICE=$KW_TUNNEL_SITE_UNIT_NAME
+    systemctl is-active --quiet "$KW_RENAME_OLD_TUNNEL_SERVICE" && KW_RENAME_TUNNEL_WAS_ACTIVE=1
+    systemctl is-enabled --quiet "$KW_RENAME_OLD_TUNNEL_SERVICE" && KW_RENAME_TUNNEL_WAS_ENABLED=1
+  fi
   if [[ ! -e $KW_BACKUP_ROOT && ! -L $KW_BACKUP_ROOT ]]; then
     install -d -m 0700 -o root -g root -- "$KW_BACKUP_ROOT" || return 1
   fi
@@ -299,6 +392,12 @@ kw_site_rename_locked() (
   if [[ -f $KW_RENAME_OLD_RATE ]]; then
     install -m 0600 -o root -g root -- "$KW_RENAME_OLD_RATE" "$KW_RENAME_STAGE/local-rate" || return 1
     install -m 0644 -o root -g root -- "$kw_cf_antiddos_conf" "$KW_RENAME_STAGE/antiddos.conf" || return 1
+  fi
+  if ((KW_RENAME_TUNNEL_PRESENT)); then
+    cp -p -- "$KW_RENAME_OLD_TUNNEL_TOKEN" "$KW_RENAME_STAGE/tunnel-token" || return 1
+    cp -p -- "$KW_RENAME_OLD_TUNNEL_UNIT" "$KW_RENAME_STAGE/tunnel-unit" || return 1
+    kw_tunnel_render_site_unit "$new_id" > "$KW_RENAME_STAGE/new-tunnel-unit" || return 1
+    chmod 0644 -- "$KW_RENAME_STAGE/new-tunnel-unit" || return 1
   fi
   printf 'Đang đổi site; bản cấu hình cũ sẽ giữ tại %s\n' "$KW_RENAME_STAGE"
   # shellcheck disable=SC2034 # Rollback must restore service state even after a partial move.
@@ -364,6 +463,7 @@ kw_site_rename_locked() (
   fi
   kw_site_lookup "$new" || return 1
   [[ $KW_SITE_OWNER == "$KW_RENAME_NEW_OWNER" ]] || return 1
+  kw_site_rename_tunnel_migrate "$new" || return 1
   # shellcheck disable=SC2034 # Read by EXIT rollback trap.
   KW_RENAME_DONE=1
   printf 'Đã đổi %s → %s. Cập nhật DNS/route Tunnel và URL ứng dụng; cấp SSL riêng cho domain mới.\n' "$old" "$new"
@@ -377,6 +477,8 @@ kw_site_rename() (
   flock -n 9 || return 1
   exec 8>/run/lock/kwvps-nginx.lock || return 2
   flock -n 8 || return 1
+  exec 6>/run/lock/kwvps-tunnel.lock || return 2
+  flock -n 6 || return 1
   exec 7>/run/lock/kwvps-cloudflare.lock || return 2
   flock -n 7 || return 1
   kw_site_rename_locked "$old" "$new"
